@@ -25,15 +25,19 @@ const escanearCaja = catchAsync(async (req, res, next) => {
   if (!parsed)
     return next(new AppError("Formato inválido. Esperado: ID$SKU$PARES$CONSECUTIVO", 400));
 
-  // Buscar si ya existe esta caja
+  // Buscar si ya existe esta caja.
+  // La identidad de una caja es box_id + SKU + consecutivo: cuando el box_id
+  // es una fecha (ej. 02072026), distintos SKU pueden repetir el mismo
+  // consecutivo el mismo día, así que el SKU es indispensable para no retomar
+  // la caja equivocada.
   const existe = await db.query(
-    `SELECT c.*, 
+    `SELECT c.*,
             COALESCE(json_agg(p.* ORDER BY p.creado_en DESC) FILTER (WHERE p.id IS NOT NULL), '[]') as pares
      FROM recepcion_cajas c
      LEFT JOIN recepcion_pares p ON p.caja_id = c.id
-     WHERE c.box_id = $1 AND c.consecutivo = $2
+     WHERE c.box_id = $1 AND c.sku = $2 AND c.consecutivo = $3
      GROUP BY c.id`,
-    [parsed.boxId, parsed.consecutivo]
+    [parsed.boxId, parsed.sku, parsed.consecutivo]
   );
 
   if (existe.rows.length) {
