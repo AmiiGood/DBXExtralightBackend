@@ -17,6 +17,22 @@ const createRegistroValidation = [
       "El ID del área de producción debe ser un número entero positivo"
     ),
 
+  body("unidadNegocioId")
+    .notEmpty()
+    .withMessage("La unidad de negocio es requerida")
+    .isInt({ min: 1 })
+    .withMessage("El ID de la unidad de negocio debe ser un entero positivo"),
+
+  body("modeloId")
+    .optional({ nullable: true })
+    .isInt({ min: 1 })
+    .withMessage("El ID del modelo debe ser un número entero positivo"),
+
+  body("procesoCrocs")
+    .optional({ nullable: true })
+    .isIn(["ENSAMBLE", "DIGITAL_PRINTING"])
+    .withMessage("procesoCrocs debe ser ENSAMBLE o DIGITAL_PRINTING"),
+
   body("tipoDefectoId")
     .notEmpty()
     .withMessage("El tipo de defecto es requerido")
@@ -100,6 +116,16 @@ const getRegistrosValidation = [
     .withMessage(
       "El ID del área de producción debe ser un número entero positivo"
     ),
+
+  query("unidadNegocioId")
+    .optional()
+    .isInt({ min: 1 })
+    .withMessage("El ID de la unidad de negocio debe ser un entero positivo"),
+
+  query("modeloId")
+    .optional()
+    .isInt({ min: 1 })
+    .withMessage("El ID del modelo debe ser un número entero positivo"),
 
   query("tipoDefectoId")
     .optional()

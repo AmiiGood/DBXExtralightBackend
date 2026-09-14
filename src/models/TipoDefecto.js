@@ -6,14 +6,17 @@ class TipoDefecto {
    */
   static async findAll(filters = {}) {
     let query = `
-      SELECT 
-        id,
-        nombre,
-        descripcion,
-        activo,
-        creado_en,
-        actualizado_en
-      FROM tipos_defectos
+      SELECT
+        td.id,
+        td.nombre,
+        td.descripcion,
+        td.activo,
+        td.grupo_defecto_id,
+        gd.nombre as grupo,
+        td.creado_en,
+        td.actualizado_en
+      FROM tipos_defectos td
+      LEFT JOIN grupos_defecto gd ON gd.id = td.grupo_defecto_id
       WHERE 1=1
     `;
 
@@ -21,18 +24,25 @@ class TipoDefecto {
     let paramCount = 1;
 
     if (filters.activo !== undefined) {
-      query += ` AND activo = $${paramCount}`;
+      query += ` AND td.activo = $${paramCount}`;
       values.push(filters.activo);
       paramCount++;
     }
 
+    // Filtrar por grupo de defecto (GENERAL / ENSAMBLE / DIGITAL_PRINTING)
+    if (filters.grupo) {
+      query += ` AND gd.nombre = $${paramCount}`;
+      values.push(filters.grupo);
+      paramCount++;
+    }
+
     if (filters.search) {
-      query += ` AND nombre ILIKE $${paramCount}`;
+      query += ` AND td.nombre ILIKE $${paramCount}`;
       values.push(`%${filters.search}%`);
       paramCount++;
     }
 
-    query += " ORDER BY nombre ASC";
+    query += " ORDER BY td.nombre ASC";
 
     const result = await db.query(query, values);
     return result.rows;

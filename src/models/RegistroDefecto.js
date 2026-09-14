@@ -8,6 +8,9 @@ class RegistroDefecto {
     const {
       turnoId,
       areaProduccionId,
+      unidadNegocioId,
+      modeloId,
+      procesoCrocs,
       tipoDefectoId,
       paresRechazados,
       observaciones,
@@ -18,18 +21,24 @@ class RegistroDefecto {
       INSERT INTO registros_defectos (
         turno_id,
         area_produccion_id,
+        unidad_negocio_id,
+        modelo_id,
+        proceso_crocs,
         tipo_defecto_id,
         pares_rechazados,
         observaciones,
         registrado_por
-      ) VALUES ($1, $2, $3, $4, $5, $6)
-      RETURNING 
-        id, 
-        turno_id, 
-        area_produccion_id, 
-        tipo_defecto_id, 
-        pares_rechazados, 
-        observaciones, 
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+      RETURNING
+        id,
+        turno_id,
+        area_produccion_id,
+        unidad_negocio_id,
+        modelo_id,
+        proceso_crocs,
+        tipo_defecto_id,
+        pares_rechazados,
+        observaciones,
         fecha_registro,
         registrado_por
     `;
@@ -37,6 +46,9 @@ class RegistroDefecto {
     const values = [
       turnoId,
       areaProduccionId,
+      unidadNegocioId || null,
+      modeloId || null,
+      procesoCrocs || null,
       tipoDefectoId,
       paresRechazados,
       observaciones || null,
@@ -58,6 +70,11 @@ class RegistroDefecto {
         t.nombre as turno,
         rd.area_produccion_id,
         ap.nombre as area_produccion,
+        rd.unidad_negocio_id,
+        un.nombre as unidad_negocio,
+        rd.modelo_id,
+        mo.nombre as modelo,
+        rd.proceso_crocs,
         rd.tipo_defecto_id,
         td.nombre as tipo_defecto,
         rd.pares_rechazados,
@@ -68,6 +85,8 @@ class RegistroDefecto {
       FROM registros_defectos rd
       LEFT JOIN turnos t ON rd.turno_id = t.id
       LEFT JOIN areas_produccion ap ON rd.area_produccion_id = ap.id
+      LEFT JOIN unidades_negocio un ON rd.unidad_negocio_id = un.id
+      LEFT JOIN modelos mo ON rd.modelo_id = mo.id
       LEFT JOIN tipos_defectos td ON rd.tipo_defecto_id = td.id
       LEFT JOIN usuarios u ON rd.registrado_por = u.id
       WHERE 1=1
@@ -101,6 +120,20 @@ class RegistroDefecto {
     if (filters.areaProduccionId) {
       query += ` AND rd.area_produccion_id = $${paramCount}`;
       values.push(filters.areaProduccionId);
+      paramCount++;
+    }
+
+    // Filtro por unidad de negocio
+    if (filters.unidadNegocioId) {
+      query += ` AND rd.unidad_negocio_id = $${paramCount}`;
+      values.push(filters.unidadNegocioId);
+      paramCount++;
+    }
+
+    // Filtro por modelo
+    if (filters.modeloId) {
+      query += ` AND rd.modelo_id = $${paramCount}`;
+      values.push(filters.modeloId);
       paramCount++;
     }
 
@@ -183,6 +216,18 @@ class RegistroDefecto {
       paramCount++;
     }
 
+    if (filters.unidadNegocioId) {
+      query += ` AND rd.unidad_negocio_id = $${paramCount}`;
+      values.push(filters.unidadNegocioId);
+      paramCount++;
+    }
+
+    if (filters.modeloId) {
+      query += ` AND rd.modelo_id = $${paramCount}`;
+      values.push(filters.modeloId);
+      paramCount++;
+    }
+
     if (filters.tipoDefectoId) {
       query += ` AND rd.tipo_defecto_id = $${paramCount}`;
       values.push(filters.tipoDefectoId);
@@ -212,6 +257,11 @@ class RegistroDefecto {
         rd.area_produccion_id,
         ap.nombre as area_produccion,
         ap.nombre as area_produccion_nombre,
+        rd.unidad_negocio_id,
+        un.nombre as unidad_negocio,
+        rd.modelo_id,
+        mo.nombre as modelo,
+        rd.proceso_crocs,
         rd.tipo_defecto_id,
         td.nombre as tipo_defecto,
         td.nombre as tipo_defecto_nombre,
@@ -223,6 +273,8 @@ class RegistroDefecto {
       FROM registros_defectos rd
       LEFT JOIN turnos t ON rd.turno_id = t.id
       LEFT JOIN areas_produccion ap ON rd.area_produccion_id = ap.id
+      LEFT JOIN unidades_negocio un ON rd.unidad_negocio_id = un.id
+      LEFT JOIN modelos mo ON rd.modelo_id = mo.id
       LEFT JOIN tipos_defectos td ON rd.tipo_defecto_id = td.id
       LEFT JOIN usuarios u ON rd.registrado_por = u.id
       WHERE rd.id = $1
@@ -304,9 +356,9 @@ class RegistroDefecto {
   /**
    * Obtener resumen por turno
    */
-  static async getResumenPorTurno(fechaInicio, fechaFin) {
-    const query = `
-      SELECT 
+  static async getResumenPorTurno(fechaInicio, fechaFin, unidadNegocioId = null) {
+    let query = `
+      SELECT
         t.nombre as turno,
         DATE(rd.fecha_registro) as fecha,
         COUNT(*) as total_registros,
@@ -314,20 +366,34 @@ class RegistroDefecto {
       FROM registros_defectos rd
       JOIN turnos t ON rd.turno_id = t.id
       WHERE rd.fecha_registro >= $1 AND rd.fecha_registro <= $2
+    `;
+
+    const values = [fechaInicio, fechaFin];
+    if (unidadNegocioId) {
+      query += ` AND rd.unidad_negocio_id = $3`;
+      values.push(unidadNegocioId);
+    }
+
+    query += `
       GROUP BY t.nombre, DATE(rd.fecha_registro)
       ORDER BY fecha DESC, turno ASC
     `;
 
-    const result = await db.query(query, [fechaInicio, fechaFin]);
+    const result = await db.query(query, values);
     return result.rows;
   }
 
   /**
    * Obtener top defectos más frecuentes
    */
-  static async getTopDefectos(limit = 10, fechaInicio = null, fechaFin = null) {
+  static async getTopDefectos(
+    limit = 10,
+    fechaInicio = null,
+    fechaFin = null,
+    unidadNegocioId = null
+  ) {
     let query = `
-      SELECT 
+      SELECT
         td.id,
         td.nombre as defecto,
         COUNT(rd.id) as total_registros,
@@ -349,6 +415,12 @@ class RegistroDefecto {
     if (fechaFin) {
       query += ` AND rd.fecha_registro <= $${paramCount}`;
       values.push(fechaFin);
+      paramCount++;
+    }
+
+    if (unidadNegocioId) {
+      query += ` AND rd.unidad_negocio_id = $${paramCount}`;
+      values.push(unidadNegocioId);
       paramCount++;
     }
 

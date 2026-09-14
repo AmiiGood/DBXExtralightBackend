@@ -2,6 +2,8 @@ require("dotenv").config();
 const http = require("http");
 const app = require("./src/app");
 const db = require("./src/config/database");
+const planificador = require("./src/services/planificador.service");
+const moldes = require("./src/services/sincronizarMoldes.service");
 
 const PORT = process.env.PORT || 3000;
 
@@ -17,8 +19,22 @@ const startServer = async () => {
       console.log(`💚 Health check: http://localhost:${PORT}/health`);
     });
 
+    // Reportes programados por correo. Si falla no debe impedir que el
+    // servidor arranque: la aplicación sirve igual sin envíos automáticos.
+    planificador
+      .recargar()
+      .catch((err) =>
+        console.error("⚠️  No se pudo iniciar el planificador:", err.message),
+      );
+
+    // Réplica de los tickets de Moldes. El reporte lee la copia local, así que
+    // el servidor de osTicket no recibe carga de las consultas del tablero.
+    moldes.iniciarProgramado();
+
     const gracefulShutdown = (signal) => {
       console.log(`\n⚠️  Recibida señal ${signal}. Cerrando servidor...`);
+      planificador.detenerTodas();
+      moldes.detenerProgramado();
       server.close(() => {
         console.log("✅ Servidor cerrado correctamente");
         db.pool.end(() => {

@@ -52,6 +52,11 @@ app.use("/api/qr", require("./routes/qrRoutes"));
 app.use("/api/shipping", require("./routes/shippingRoutes"));
 app.use("/api/produccion", require("./routes/produccionRoutes"));
 app.use("/api/recepcion", require("./routes/recepcionRoutes"));
+app.use("/api/articulos-massive", require("./routes/articuloMassiveRoutes"));
+app.use("/api/inyeccion", require("./routes/inyeccionRoutes"));
+app.use("/api/envio-reportes", require("./routes/envioReportesRoutes"));
+app.use("/api/moldes", require("./routes/moldesRoutes"));
+app.use("/api/compound", require("./routes/compoundRoutes"));
 
 app.use(notFound);
 app.use(errorHandler);

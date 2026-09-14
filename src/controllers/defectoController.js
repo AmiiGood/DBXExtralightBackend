@@ -2,6 +2,8 @@ const RegistroDefecto = require("../models/RegistroDefecto");
 const Turno = require("../models/Turno");
 const AreaProduccion = require("../models/AreaProduccion");
 const TipoDefecto = require("../models/TipoDefecto");
+const UnidadNegocio = require("../models/UnidadNegocio");
+const Modelo = require("../models/Modelo");
 const { catchAsync, sendSuccess, AppError } = require("../utils/errorHandler");
 const {
   registrarLog,
@@ -9,14 +11,26 @@ const {
   obtenerUserAgent,
 } = require("../utils/logger");
 
+// Procesos válidos para la unidad CROCS y el grupo de defecto que implican
+const PROCESOS_CROCS = ["ENSAMBLE", "DIGITAL_PRINTING"];
+
+/**
+ * Grupo de defecto que corresponde a una selección de unidad/proceso.
+ * - CROCS  → el proceso elegido (ENSAMBLE | DIGITAL_PRINTING)
+ * - resto  → GENERAL
+ */
+const grupoParaSeleccion = (unidadNombre, procesoCrocs) =>
+  unidadNombre === "CROCS" ? procesoCrocs : "GENERAL";
+
 /**
  * Obtener catálogos necesarios para el formulario
  */
 const getCatalogos = catchAsync(async (req, res, next) => {
-  const [turnos, areasProduccion, tiposDefectos, turnoActual] =
+  const [turnos, areasProduccion, unidadesNegocio, tiposDefectos, turnoActual] =
     await Promise.all([
       Turno.findAll({ activo: true }),
       AreaProduccion.findAll({ activo: true }),
+      UnidadNegocio.findAll({ activo: true }),
       TipoDefecto.findAll({ activo: true }),
       Turno.getCurrentShiftInfo(),
     ]);
@@ -24,9 +38,39 @@ const getCatalogos = catchAsync(async (req, res, next) => {
   sendSuccess(res, 200, {
     turnos,
     areasProduccion,
+    unidadesNegocio,
     tiposDefectos,
     turnoActual,
   });
+});
+
+/**
+ * Obtener modelos filtrados por unidad de negocio (con búsqueda opcional)
+ */
+const getModelos = catchAsync(async (req, res, next) => {
+  const { unidadNegocioId, search } = req.query;
+
+  const modelos = await Modelo.findAll({
+    unidadNegocioId: unidadNegocioId ? parseInt(unidadNegocioId) : undefined,
+    search: search || undefined,
+    activo: true,
+  });
+
+  sendSuccess(res, 200, { modelos });
+});
+
+/**
+ * Obtener tipos de defecto de un grupo (GENERAL | ENSAMBLE | DIGITAL_PRINTING)
+ */
+const getTiposDefecto = catchAsync(async (req, res, next) => {
+  const { grupo } = req.query;
+
+  const tiposDefectos = await TipoDefecto.findAll({
+    activo: true,
+    grupo: grupo || undefined,
+  });
+
+  sendSuccess(res, 200, { tiposDefectos });
 });
 
 /**
@@ -49,6 +93,9 @@ const createRegistro = catchAsync(async (req, res, next) => {
   let {
     turnoId,
     areaProduccionId,
+    unidadNegocioId,
+    modeloId,
+    procesoCrocs,
     tipoDefectoId,
     paresRechazados,
     observaciones,
@@ -76,16 +123,65 @@ const createRegistro = catchAsync(async (req, res, next) => {
     );
   }
 
-  // Validar que el tipo de defecto existe
+  // Validar la unidad de negocio
+  const unidad = await UnidadNegocio.findById(unidadNegocioId);
+  if (!unidad) {
+    return next(new AppError("La unidad de negocio especificada no existe", 400));
+  }
+
+  // Reglas según la unidad:
+  //  - CROCS → se requiere proceso (Ensamble/Digital Printing), sin modelo
+  //  - resto → se requiere modelo de esa unidad, sin proceso
+  let modelo = null;
+  if (unidad.nombre === "CROCS") {
+    modeloId = null;
+    if (!PROCESOS_CROCS.includes(procesoCrocs)) {
+      return next(
+        new AppError(
+          "Para CROCS debe indicar el proceso: ENSAMBLE o DIGITAL_PRINTING",
+          400
+        )
+      );
+    }
+  } else {
+    procesoCrocs = null;
+    modelo = await Modelo.findById(modeloId);
+    if (!modelo) {
+      return next(new AppError("El modelo especificado no existe", 400));
+    }
+    if (modelo.unidad_negocio_id !== unidad.id) {
+      return next(
+        new AppError("El modelo no pertenece a la unidad de negocio elegida", 400)
+      );
+    }
+  }
+
+  // Validar que el tipo de defecto existe y pertenece al grupo correcto
   const tipoDefecto = await TipoDefecto.findById(tipoDefectoId);
   if (!tipoDefecto) {
     return next(new AppError("El tipo de defecto especificado no existe", 400));
+  }
+  const grupoEsperado = grupoParaSeleccion(unidad.nombre, procesoCrocs);
+  const tipoConGrupo = await TipoDefecto.findAll({
+    activo: true,
+    grupo: grupoEsperado,
+  });
+  if (!tipoConGrupo.some((d) => d.id === tipoDefecto.id)) {
+    return next(
+      new AppError(
+        "El tipo de defecto no corresponde a la unidad/proceso seleccionado",
+        400
+      )
+    );
   }
 
   // Crear el registro
   const nuevoRegistro = await RegistroDefecto.create({
     turnoId,
     areaProduccionId,
+    unidadNegocioId: unidad.id,
+    modeloId,
+    procesoCrocs,
     tipoDefectoId,
     paresRechazados,
     observaciones,
@@ -105,6 +201,9 @@ const createRegistro = catchAsync(async (req, res, next) => {
     datosNuevos: {
       turno: turno.nombre,
       areaProduccion: areaProduccion.nombre,
+      unidadNegocio: unidad.nombre,
+      modelo: modelo ? modelo.nombre : null,
+      procesoCrocs,
       tipoDefecto: tipoDefecto.nombre,
       paresRechazados,
       observaciones,
@@ -131,6 +230,8 @@ const getRegistros = catchAsync(async (req, res, next) => {
     fechaFin,
     turnoId,
     areaProduccionId,
+    unidadNegocioId,
+    modeloId,
     tipoDefectoId,
     registradoPor,
     limit = 50,
@@ -144,6 +245,8 @@ const getRegistros = catchAsync(async (req, res, next) => {
     fechaFin,
     turnoId: turnoId ? parseInt(turnoId) : undefined,
     areaProduccionId: areaProduccionId ? parseInt(areaProduccionId) : undefined,
+    unidadNegocioId: unidadNegocioId ? parseInt(unidadNegocioId) : undefined,
+    modeloId: modeloId ? parseInt(modeloId) : undefined,
     tipoDefectoId: tipoDefectoId ? parseInt(tipoDefectoId) : undefined,
     registradoPor: registradoPor ? parseInt(registradoPor) : undefined,
     limit: parseInt(limit),
@@ -325,7 +428,7 @@ const deleteRegistro = catchAsync(async (req, res, next) => {
  * Obtener resumen por turno
  */
 const getResumenPorTurno = catchAsync(async (req, res, next) => {
-  const { fechaInicio, fechaFin } = req.query;
+  const { fechaInicio, fechaFin, unidadNegocioId } = req.query;
 
   if (!fechaInicio || !fechaFin) {
     return next(new AppError("Se requieren fechaInicio y fechaFin", 400));
@@ -333,7 +436,8 @@ const getResumenPorTurno = catchAsync(async (req, res, next) => {
 
   const resumen = await RegistroDefecto.getResumenPorTurno(
     fechaInicio,
-    fechaFin
+    fechaFin,
+    unidadNegocioId ? parseInt(unidadNegocioId) : null
   );
 
   sendSuccess(res, 200, { resumen });
@@ -343,12 +447,13 @@ const getResumenPorTurno = catchAsync(async (req, res, next) => {
  * Obtener top defectos más frecuentes
  */
 const getTopDefectos = catchAsync(async (req, res, next) => {
-  const { limit = 10, fechaInicio, fechaFin } = req.query;
+  const { limit = 10, fechaInicio, fechaFin, unidadNegocioId } = req.query;
 
   const topDefectos = await RegistroDefecto.getTopDefectos(
     parseInt(limit),
     fechaInicio,
-    fechaFin
+    fechaFin,
+    unidadNegocioId ? parseInt(unidadNegocioId) : null
   );
 
   sendSuccess(res, 200, { topDefectos });
@@ -356,6 +461,8 @@ const getTopDefectos = catchAsync(async (req, res, next) => {
 
 module.exports = {
   getCatalogos,
+  getModelos,
+  getTiposDefecto,
   getTurnoActual,
   createRegistro,
   getRegistros,

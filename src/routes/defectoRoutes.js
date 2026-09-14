@@ -50,6 +50,30 @@ router.get(
 );
 
 /**
+ * @route   GET /api/defectos/modelos
+ * @desc    Modelos por unidad de negocio (con búsqueda ?search= para autocompletar)
+ * @query   ?unidadNegocioId=1&search=balt
+ * @access  Private (Calidad puede leer)
+ */
+router.get(
+  "/modelos",
+  verificarPermiso("FPG-QA-001 Ver.03 OBA ensamble", "leer"),
+  defectoController.getModelos
+);
+
+/**
+ * @route   GET /api/defectos/tipos-defecto
+ * @desc    Tipos de defecto por grupo (GENERAL | ENSAMBLE | DIGITAL_PRINTING)
+ * @query   ?grupo=ENSAMBLE
+ * @access  Private (Calidad puede leer)
+ */
+router.get(
+  "/tipos-defecto",
+  verificarPermiso("FPG-QA-001 Ver.03 OBA ensamble", "leer"),
+  defectoController.getTiposDefecto
+);
+
+/**
  * @route   GET /api/defectos/resumen-turno
  * @desc    Obtener resumen de defectos por turno
  * @query   ?fechaInicio=2025-01-01&fechaFin=2025-01-31
