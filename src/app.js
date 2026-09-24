@@ -57,6 +57,8 @@ app.use("/api/inyeccion", require("./routes/inyeccionRoutes"));
 app.use("/api/envio-reportes", require("./routes/envioReportesRoutes"));
 app.use("/api/moldes", require("./routes/moldesRoutes"));
 app.use("/api/compound", require("./routes/compoundRoutes"));
+app.use("/api/staff", require("./routes/staffRoutes"));
+app.use("/api/resultados", require("./routes/resultadosRoutes"));
 
 app.use(notFound);
 app.use(errorHandler);

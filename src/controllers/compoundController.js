@@ -146,11 +146,13 @@ const importarCarga = catchAsync(async (req, res) => {
       accion: "IMPORT",
       modulo: "Reportes de Compuestos",
       tablaAfectada: destino === "RECUPERACION" ? "comp_recuperacion" : "comp_produccion",
-      registroId: resultado.cargaId,
+      // El id de carga es un uuid y logs_sistema.registro_id es integer:
+      // pasarlo ahí hacía fallar el INSERT del log y la importación se quedaba
+      // sin registrar. Va en la descripción, que es texto.
       descripcion:
         `Carga de "${nombre}": ${resultado.insertadas} renglones ` +
         `(${resultado.fechaMin} a ${resultado.fechaMax}), ` +
-        `${resultado.borradas} reemplazados`,
+        `${resultado.borradas} reemplazados. Carga ${resultado.cargaId}`,
       ipAddress: obtenerIP(req),
       userAgent: obtenerUserAgent(req),
     });
