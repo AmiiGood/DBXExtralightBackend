@@ -265,10 +265,11 @@ const updateAreaProduccion = catchAsync(async (req, res, next) => {
 // =====================
 
 const getTiposDefectos = catchAsync(async (req, res, next) => {
-  const { activo, search } = req.query;
+  const { activo, search, grupo } = req.query;
   const filters = {};
   if (activo !== undefined) filters.activo = activo === "true";
   if (search) filters.search = search;
+  if (grupo) filters.grupo = grupo;
 
   const tiposDefectos = await TipoDefecto.findAll(filters);
   sendSuccess(res, 200, { tiposDefectos });
@@ -286,9 +287,15 @@ const getTipoDefectoById = catchAsync(async (req, res, next) => {
 });
 
 const createTipoDefecto = catchAsync(async (req, res, next) => {
-  const { nombre, descripcion } = req.body;
+  const { nombre, descripcion, grupo } = req.body;
 
-  const tipoDefecto = await TipoDefecto.create({ nombre, descripcion });
+  if (await TipoDefecto.findByName(nombre, grupo)) {
+    return next(
+      new AppError(`Ya existe el defecto "${nombre}" en el grupo ${grupo}`, 409),
+    );
+  }
+
+  const tipoDefecto = await TipoDefecto.create({ nombre, descripcion, grupo });
 
   await registrarLog({
     usuarioId: req.usuario.id,
@@ -299,7 +306,7 @@ const createTipoDefecto = catchAsync(async (req, res, next) => {
     descripcion: `Tipo de defecto creado: ${nombre}`,
     ipAddress: obtenerIP(req),
     userAgent: obtenerUserAgent(req),
-    datosNuevos: { nombre, descripcion },
+    datosNuevos: { nombre, descripcion, grupo },
   });
 
   sendSuccess(res, 201, { tipoDefecto }, "Tipo de defecto creado exitosamente");
@@ -307,7 +314,7 @@ const createTipoDefecto = catchAsync(async (req, res, next) => {
 
 const updateTipoDefecto = catchAsync(async (req, res, next) => {
   const { id } = req.params;
-  const { nombre, descripcion, activo } = req.body;
+  const { nombre, descripcion, grupo, activo } = req.body;
 
   const tipoExistente = await TipoDefecto.findById(id);
   if (!tipoExistente) {
@@ -316,9 +323,24 @@ const updateTipoDefecto = catchAsync(async (req, res, next) => {
 
   const datosAnteriores = { ...tipoExistente };
 
+  const nombreFinal = nombre ?? tipoExistente.nombre;
+  const grupoFinal = grupo ?? tipoExistente.grupo;
+  if ((nombre !== undefined || grupo !== undefined) && grupoFinal) {
+    const duplicado = await TipoDefecto.findByName(nombreFinal, grupoFinal);
+    if (duplicado && String(duplicado.id) !== String(id)) {
+      return next(
+        new AppError(
+          `Ya existe el defecto "${nombreFinal}" en el grupo ${grupoFinal}`,
+          409,
+        ),
+      );
+    }
+  }
+
   const tipoDefecto = await TipoDefecto.update(id, {
     nombre,
     descripcion,
+    grupo,
     activo,
   });
 

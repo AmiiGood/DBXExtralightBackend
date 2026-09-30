@@ -53,13 +53,15 @@ class TipoDefecto {
    */
   static async findById(id) {
     const query = `
-      SELECT 
-        id,
-        nombre,
-        descripcion,
-        activo
-      FROM tipos_defectos
-      WHERE id = $1
+      SELECT
+        td.id,
+        td.nombre,
+        td.descripcion,
+        td.activo,
+        gd.nombre AS grupo
+      FROM tipos_defectos td
+      LEFT JOIN grupos_defecto gd ON gd.id = td.grupo_defecto_id
+      WHERE td.id = $1
     `;
 
     const result = await db.query(query, [id]);
@@ -69,18 +71,19 @@ class TipoDefecto {
   /**
    * Buscar tipo de defecto por nombre
    */
-  static async findByName(nombre) {
+  static async findByName(nombre, grupo) {
     const query = `
-      SELECT 
-        id,
-        nombre,
-        descripcion,
-        activo
-      FROM tipos_defectos
-      WHERE nombre = $1
+      SELECT
+        td.id,
+        td.nombre,
+        td.descripcion,
+        td.activo
+      FROM tipos_defectos td
+      JOIN grupos_defecto gd ON gd.id = td.grupo_defecto_id
+      WHERE td.nombre = $1 AND gd.nombre = $2
     `;
 
-    const result = await db.query(query, [nombre]);
+    const result = await db.query(query, [nombre, grupo]);
     return result.rows[0];
   }
 
@@ -88,15 +91,15 @@ class TipoDefecto {
    * Crear un nuevo tipo de defecto
    */
   static async create(data) {
-    const { nombre, descripcion } = data;
+    const { nombre, descripcion, grupo } = data;
 
     const query = `
-      INSERT INTO tipos_defectos (nombre, descripcion)
-      VALUES ($1, $2)
-      RETURNING id, nombre, descripcion, activo, creado_en
+      INSERT INTO tipos_defectos (nombre, descripcion, grupo_defecto_id)
+      VALUES ($1, $2, (SELECT id FROM grupos_defecto WHERE nombre = $3))
+      RETURNING id, nombre, descripcion, activo, grupo_defecto_id, creado_en
     `;
 
-    const result = await db.query(query, [nombre, descripcion || null]);
+    const result = await db.query(query, [nombre, descripcion || null, grupo]);
     return result.rows[0];
   }
 
@@ -117,6 +120,14 @@ class TipoDefecto {
     if (data.descripcion !== undefined) {
       fields.push(`descripcion = $${paramCount}`);
       values.push(data.descripcion);
+      paramCount++;
+    }
+
+    if (data.grupo !== undefined) {
+      fields.push(
+        `grupo_defecto_id = (SELECT id FROM grupos_defecto WHERE nombre = $${paramCount})`,
+      );
+      values.push(data.grupo);
       paramCount++;
     }
 

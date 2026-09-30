@@ -5,6 +5,7 @@ const db = require("./src/config/database");
 const planificador = require("./src/services/planificador.service");
 const moldes = require("./src/services/sincronizarMoldes.service");
 const ti = require("./src/services/sincronizarTi.service");
+const customerService = require("./src/services/sincronizarCustomerService.service");
 
 const PORT = process.env.PORT || 3000;
 
@@ -34,11 +35,17 @@ const startServer = async () => {
     moldes.iniciarProgramado();
     ti.iniciarProgramado();
 
+    // Customer Service no replica una base: vigila dos archivos en una
+    // carpeta de red y los relee cuando cambian. Si el servidor no alcanza
+    // el recurso compartido, lo anota y sigue: no tumba el arranque.
+    customerService.iniciarProgramado();
+
     const gracefulShutdown = (signal) => {
       console.log(`\n⚠️  Recibida señal ${signal}. Cerrando servidor...`);
       planificador.detenerTodas();
       moldes.detenerProgramado();
       ti.detenerProgramado();
+      customerService.detenerProgramado();
       server.close(() => {
         console.log("✅ Servidor cerrado correctamente");
         db.pool.end(() => {

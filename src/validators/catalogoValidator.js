@@ -108,6 +108,8 @@ const updateAreaProduccionValidation = [
 // TIPOS DE DEFECTOS
 // =====================
 
+const GRUPOS_DEFECTO = ["GENERAL", "ENSAMBLE", "DIGITAL_PRINTING"];
+
 const createTipoDefectoValidation = [
   body("nombre")
     .trim()
@@ -122,6 +124,10 @@ const createTipoDefectoValidation = [
     .withMessage("La descripción debe ser texto")
     .isLength({ max: 500 })
     .withMessage("La descripción no puede exceder 500 caracteres"),
+
+  body("grupo")
+    .isIn(GRUPOS_DEFECTO)
+    .withMessage(`El grupo debe ser: ${GRUPOS_DEFECTO.join(", ")}`),
 ];
 
 const updateTipoDefectoValidation = [
@@ -141,6 +147,11 @@ const updateTipoDefectoValidation = [
     .withMessage("La descripción debe ser texto")
     .isLength({ max: 500 })
     .withMessage("La descripción no puede exceder 500 caracteres"),
+
+  body("grupo")
+    .optional()
+    .isIn(GRUPOS_DEFECTO)
+    .withMessage(`El grupo debe ser: ${GRUPOS_DEFECTO.join(", ")}`),
 
   body("activo").optional().isBoolean().withMessage("Activo debe ser booleano"),
 ];
