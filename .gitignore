@@ -32,3 +32,5 @@ temp/
 # Build
 dist/
 build/
+# Adjuntos de las solicitudes de Compra (COMPRAS_ARCHIVOS_DIR)
+storage/

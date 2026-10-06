@@ -6,6 +6,8 @@ const planificador = require("./src/services/planificador.service");
 const moldes = require("./src/services/sincronizarMoldes.service");
 const ti = require("./src/services/sincronizarTi.service");
 const customerService = require("./src/services/sincronizarCustomerService.service");
+const comprasEnvio = require("./src/services/enviarCompras.service");
+const comprasAvisos = require("./src/services/avisosCompras.service");
 
 const PORT = process.env.PORT || 3000;
 
@@ -34,6 +36,14 @@ const startServer = async () => {
     // de los tableros.
     moldes.iniciarProgramado();
     ti.iniciarProgramado();
+
+    // Solicitudes de Compra aprobadas que no alcanzaron a llegar al osTicket
+    // de Compras (servidor caído, red). Se reintentan solas.
+    comprasEnvio.iniciarProgramado();
+
+    // Recordatorios a gerentes con solicitudes pendientes (L–V 9:00 y 16:00
+    // por omisión; se cambia en Aprobadores de Compras)
+    comprasAvisos.iniciarProgramado();
 
     // Customer Service no replica una base: vigila dos archivos en una
     // carpeta de red y los relee cuando cambian. Si el servidor no alcanza

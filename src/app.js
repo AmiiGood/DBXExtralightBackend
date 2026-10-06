@@ -61,6 +61,7 @@ app.use("/api/staff", require("./routes/staffRoutes"));
 app.use("/api/resultados", require("./routes/resultadosRoutes"));
 app.use("/api/ti", require("./routes/tiRoutes"));
 app.use("/api/customer-service", require("./routes/customerServiceRoutes"));
+app.use("/api/compras", require("./routes/comprasRoutes"));
 
 app.use(notFound);
 app.use(errorHandler);
