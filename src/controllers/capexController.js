@@ -24,13 +24,15 @@ async function estadoArchivo() {
  * GET /api/capex/reportes
  */
 const getReporte = catchAsync(async (req, res) => {
-  const [resumen, proyectos, trimestres, archivo] = await Promise.all([
+  const [resumen, proyectos, trimestres, avance, iniziative, archivo] = await Promise.all([
     Reporte.resumen(),
     Reporte.aprobados(),
     Reporte.trimestres(),
+    Reporte.avance(),
+    Reporte.iniziative(),
     estadoArchivo(),
   ]);
-  sendSuccess(res, 200, { resumen, proyectos, trimestres, archivo });
+  sendSuccess(res, 200, { resumen, proyectos, trimestres, avance, iniziative, archivo });
 });
 
 /**
@@ -47,10 +49,12 @@ const getArchivo = catchAsync(async (req, res) => {
  * cambia cuando arranca otro año de CAPEX.
  */
 const putArchivo = catchAsync(async (req, res) => {
-  const { carpeta, patron, hoja, bloque, activo } = req.body || {};
+  const { carpeta, patron, hoja, bloque, hoja_iniziative, activo } = req.body || {};
   let actualizado;
   try {
-    actualizado = await sincronizador.guardarConfiguracion({ carpeta, patron, hoja, bloque, activo });
+    actualizado = await sincronizador.guardarConfiguracion({
+      carpeta, patron, hoja, bloque, hoja_iniziative, activo,
+    });
   } catch (e) {
     throw new AppError(e.message, 400);
   }

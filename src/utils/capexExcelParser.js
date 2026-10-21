@@ -96,19 +96,32 @@ function texto(celda) {
   return t === "" ? null : t;
 }
 
+/** Lee el libro una vez, con estilos: lo comparten los dos lectores. */
+const leerLibro = (contenido) =>
+  Buffer.isBuffer(contenido)
+    ? XLSX.read(contenido, { type: "buffer", cellStyles: true })
+    : contenido;
+
+/** La hoja por su nombre, tolerando mayúsculas y espacios. */
+function buscarHoja(libro, hoja) {
+  return (
+    libro.SheetNames.find((n) => n === hoja) ||
+    libro.SheetNames.find((n) => normal(n) === normal(hoja)) ||
+    null
+  );
+}
+
 /**
  * Lee el bloque de un libro.
  *
- * @param {Buffer} contenido
+ * @param {Buffer|Object} contenido  el archivo, o el libro ya leído
  * @param {Object} opciones { hoja: 'Capex update 2025-2026', bloque: 'CAPEX 2026' }
  * @returns {Object} { filas, avisos, hoja, bloque, renglonEncabezado, ocultos }
  */
 function parsearCapex(contenido, { hoja, bloque }) {
-  const libro = XLSX.read(contenido, { type: "buffer", cellStyles: true });
+  const libro = leerLibro(contenido);
 
-  const nombreHoja =
-    libro.SheetNames.find((n) => n === hoja) ||
-    libro.SheetNames.find((n) => normal(n) === normal(hoja));
+  const nombreHoja = buscarHoja(libro, hoja);
   if (!nombreHoja) {
     throw new Error(
       `El libro no tiene una hoja llamada "${hoja}". Hojas: ${libro.SheetNames.join(", ")}.`,
@@ -263,4 +276,98 @@ function parsearCapex(contenido, { hoja, bloque }) {
   };
 }
 
-module.exports = { parsearCapex, estadoDeRelleno, ETAPAS };
+/**
+ * Lee la hoja 'nuove iniziative': el plan de inversión por iniciativa y su
+ * curva de gasto ("Curva di spesa") de 2026 a 2030.
+ *
+ * ---------------------------------------------------------------------------
+ * SUS CÓDIGOS NO SON LOS DE 'Capex update'
+ * ---------------------------------------------------------------------------
+ * Aquí 26-MEX-01 es "Injection machinery replacement" y en la otra hoja es
+ * "Dual Color"; 26-MEX-03 aquí es "HSE" y allá "Mezzanine". Son dos
+ * numeraciones distintas con el mismo formato, así que NO se cruzan.
+ *
+ * ---------------------------------------------------------------------------
+ * MILES DE EUROS
+ * ---------------------------------------------------------------------------
+ * Los años vienen en k€ (el encabezado del total lo dice: "previsto (k€)").
+ * Se guardan en euros, como el resto del reporte. La columna oculta "2026,
+ * miles" es el mismo 2026 ya en euros y no se lee: se respetan las columnas
+ * ocultas igual que los renglones.
+ *
+ * El total de cada iniciativa se suma de los años y no se lee de la columna
+ * del libro (también oculta).
+ */
+function parsearIniziative(contenido, { hoja }) {
+  const libro = leerLibro(contenido);
+  const nombreHoja = buscarHoja(libro, hoja);
+  if (!nombreHoja) {
+    return { filas: [], anios: [], avisos: [`El libro no tiene la hoja "${hoja}".`] };
+  }
+
+  const ws = libro.Sheets[nombreHoja];
+  const rango = XLSX.utils.decode_range(ws["!ref"]);
+  const celda = (c, r) => ws[XLSX.utils.encode_cell({ c, r })];
+  const filaOculta = (r) => Boolean(ws["!rows"]?.[r]?.hidden);
+  const colOculta = (c) => Boolean(ws["!cols"]?.[c]?.hidden);
+
+  // El encabezado es el renglón que trae "Project code"
+  let filaEnc = -1;
+  for (let r = rango.s.r; r <= Math.min(rango.e.r, rango.s.r + 15) && filaEnc < 0; r++) {
+    for (let c = rango.s.c; c <= rango.e.c; c++) {
+      if (/project code/.test(normal(celda(c, r)?.v))) {
+        filaEnc = r;
+        break;
+      }
+    }
+  }
+  if (filaEnc < 0) {
+    return { filas: [], anios: [], avisos: [`En "${nombreHoja}" no se encontró el encabezado "Project code".`] };
+  }
+
+  const col = {};
+  const anios = [];
+  for (let c = rango.s.c; c <= rango.e.c; c++) {
+    const t = normal(celda(c, filaEnc)?.v);
+    if (!t) continue;
+    if (/^owner/.test(t)) col.owner = c;
+    else if (/project code/.test(t)) col.codigo = c;
+    else if (/^descrizione/.test(t)) col.descripcion = c;
+    else if (/^stabilimento/.test(t)) col.planta = c;
+    else if (/^studi/.test(t)) col.estudios = c;
+    else if (/^\d{4}$/.test(t) && !colOculta(c)) anios.push({ anio: Number(t), c });
+  }
+
+  const filas = [];
+  for (let r = filaEnc + 1; r <= rango.e.r; r++) {
+    if (filaOculta(r)) continue;
+    const codigo = texto(celda(col.codigo, r));
+    const descripcion = texto(celda(col.descripcion, r));
+    // Los renglones vacíos del final traen solo la planta y la fórmula del total
+    if (!codigo && !descripcion) continue;
+
+    const porAnio = {};
+    let total = 0;
+    for (const { anio, c } of anios) {
+      const v = numero(celda(c, r));
+      if (v == null) continue;
+      porAnio[anio] = v * 1000;
+      total += v * 1000;
+    }
+
+    filas.push({
+      fila: r + 1,
+      codigo,
+      descripcion,
+      owner: col.owner != null ? texto(celda(col.owner, r)) : null,
+      planta: col.planta != null ? texto(celda(col.planta, r)) : null,
+      estudios: col.estudios != null ? texto(celda(col.estudios, r)) : null,
+      anios: porAnio,
+      total,
+    });
+  }
+
+  return { filas, anios: anios.map((a) => a.anio), avisos: [], hoja: nombreHoja };
+}
+
+module.exports = { parsearCapex, parsearIniziative, leerLibro, estadoDeRelleno, ETAPAS };

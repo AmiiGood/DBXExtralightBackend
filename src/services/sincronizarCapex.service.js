@@ -3,7 +3,7 @@ const path = require("path");
 const crypto = require("crypto");
 const cron = require("node-cron");
 const db = require("../config/database");
-const { parsearCapex } = require("../utils/capexExcelParser");
+const { parsearCapex, parsearIniziative, leerLibro } = require("../utils/capexExcelParser");
 
 /**
  * Sincronización del plan de CAPEX desde la carpeta de red.
@@ -89,7 +89,7 @@ async function configDe() {
 
 async function leerConfig() {
   const { rows } = await db.query(
-    `SELECT clave, nombre, carpeta, patron, hoja, bloque, activo, archivo, revision,
+    `SELECT clave, nombre, carpeta, patron, hoja, bloque, hoja_iniziative, activo, archivo, revision,
             huella, tamano_bytes, filas, aprobados, avisos, ultimo_error,
             to_char(modificado_en,  'YYYY-MM-DD HH24:MI:SS') AS modificado_texto,
             to_char(leido_en,       'YYYY-MM-DD HH24:MI:SS') AS leido_texto,
@@ -108,8 +108,9 @@ async function probar() {
   const config = await configDe();
   try {
     const elegido = await elegirArchivo(config);
-    const contenido = await fsp.readFile(elegido.ruta);
-    const r = parsearCapex(contenido, { hoja: config.hoja, bloque: config.bloque });
+    const libro = leerLibro(await fsp.readFile(elegido.ruta));
+    const r = parsearCapex(libro, { hoja: config.hoja, bloque: config.bloque });
+    const ini = parsearIniziative(libro, { hoja: config.hoja_iniziative });
     const aprobados = r.filas.filter((f) => f.aprobado_foam).length;
     return {
       ok: true,
@@ -119,8 +120,11 @@ async function probar() {
       mensaje:
         `Se leería "${elegido.archivo}". El bloque "${config.bloque}" trae ` +
         `${r.filas.length} renglones visibles (${r.ocultos} ocultos que no se leen), ` +
-        `${aprobados} con Firmas FOAM en verde.`,
-      avisos: r.avisos,
+        `${aprobados} con Firmas FOAM en verde. ` +
+        (ini.filas.length
+          ? `"${config.hoja_iniziative}" trae ${ini.filas.length} iniciativas.`
+          : ini.avisos.join(" ")),
+      avisos: [...r.avisos, ...ini.avisos],
     };
   } catch (e) {
     return {
@@ -164,6 +168,21 @@ async function guardarProyectos(cliente, filas, bloque, archivo, cargaId) {
     guardadas += rowCount;
   }
   return guardadas;
+}
+
+/** Igual: reemplazo completo. Son una decena de renglones. */
+async function guardarIniziative(cliente, filas, archivo, cargaId) {
+  await cliente.query("DELETE FROM capex_iniziative");
+  for (const f of filas) {
+    await cliente.query(
+      `INSERT INTO capex_iniziative
+         (fila, codigo, descripcion, owner, planta, estudios, anios, total, archivo_origen, carga_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+      [f.fila, f.codigo, f.descripcion, f.owner, f.planta, f.estudios,
+       JSON.stringify(f.anios), f.total, archivo, cargaId],
+    );
+  }
+  return filas.length;
 }
 
 /**
@@ -240,7 +259,12 @@ async function sincronizar(opciones = {}) {
   }
 
   try {
-    const r = parsearCapex(contenido, { hoja: config.hoja, bloque: config.bloque });
+    const libro = leerLibro(contenido);
+    const r = parsearCapex(libro, { hoja: config.hoja, bloque: config.bloque });
+    // Si la hoja de iniciativas falta o cambió, se avisa pero no se detiene
+    // la carga del bloque, que es lo principal del reporte.
+    const ini = parsearIniziative(libro, { hoja: config.hoja_iniziative });
+    r.avisos.push(...ini.avisos);
     if (r.filas.length === 0) {
       return cerrarConError(
         `El bloque "${config.bloque}" no trae ningún renglón visible. ${r.avisos.join(" ")}`,
@@ -254,6 +278,9 @@ async function sincronizar(opciones = {}) {
     try {
       await cliente.query("BEGIN");
       guardadas = await guardarProyectos(cliente, r.filas, config.bloque, elegido.archivo, cargaId);
+      if (ini.filas.length) {
+        await guardarIniziative(cliente, ini.filas, elegido.archivo, cargaId);
+      }
       await cliente.query("COMMIT");
     } catch (e) {
       await cliente.query("ROLLBACK");
@@ -309,11 +336,11 @@ async function estado() {
   return { config, corridas: corridas.rows, cadaMinutos: CADA_MINUTOS };
 }
 
-/** Cambia la carpeta, el principio del nombre, la hoja, el bloque o si se vigila. */
+/** Cambia la carpeta, el principio del nombre, las hojas, el bloque o si se vigila. */
 async function guardarConfiguracion(cambios) {
   const campos = [];
   const params = [];
-  for (const c of ["carpeta", "patron", "hoja", "bloque"]) {
+  for (const c of ["carpeta", "patron", "hoja", "bloque", "hoja_iniziative"]) {
     if (cambios[c] === undefined) continue;
     const v = String(cambios[c]).trim();
     if (!v) throw new Error(`"${c}" no puede quedar vacío`);
@@ -327,7 +354,8 @@ async function guardarConfiguracion(cambios) {
   if (campos.length === 0) return null;
 
   // Otro origen o otro bloque: la huella vieja ya no dice nada
-  const limpia = ["carpeta", "patron", "hoja", "bloque"].some((c) => cambios[c] !== undefined)
+  const limpia = ["carpeta", "patron", "hoja", "bloque", "hoja_iniziative"]
+    .some((c) => cambios[c] !== undefined)
     ? ", huella = NULL, ultimo_error = NULL, error_en = NULL"
     : "";
 
