@@ -278,7 +278,7 @@ function parsearCapex(contenido, { hoja, bloque }) {
 
 /**
  * Lee la hoja 'nuove iniziative': el plan de inversión por iniciativa y su
- * curva de gasto ("Curva di spesa") de 2026 a 2030.
+ * presupuesto asignado a cada año ("Curva di spesa" en el libro), de 2026 a 2030.
  *
  * ---------------------------------------------------------------------------
  * SUS CÓDIGOS NO SON LOS DE 'Capex update'

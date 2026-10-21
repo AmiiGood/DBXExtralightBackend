@@ -114,7 +114,7 @@ async function avance() {
 }
 
 /**
- * La hoja 'nuove iniziative': iniciativas y su curva de gasto por año.
+ * La hoja 'nuove iniziative': iniciativas y su presupuesto por año.
  *
  * @returns {Object} { filas, anios, porAnio }  porAnio = [{ anio, total, '26-MEX-01': … }]
  */
