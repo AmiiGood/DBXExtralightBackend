@@ -6,6 +6,7 @@ const planificador = require("./src/services/planificador.service");
 const moldes = require("./src/services/sincronizarMoldes.service");
 const ti = require("./src/services/sincronizarTi.service");
 const customerService = require("./src/services/sincronizarCustomerService.service");
+const sharePoint = require("./src/services/sincronizarSharePoint.service");
 const comprasEnvio = require("./src/services/enviarCompras.service");
 const comprasAvisos = require("./src/services/avisosCompras.service");
 
@@ -50,12 +51,18 @@ const startServer = async () => {
     // el recurso compartido, lo anota y sigue: no tumba el arranque.
     customerService.iniciarProgramado();
 
+    // Compound e Inyección: sus libros viven en SharePoint. Se consultan por
+    // Microsoft Graph y, si cambiaron, se pasan al mismo importador de la
+    // pantalla de carga. Sin credenciales en el .env simplemente no se programa.
+    sharePoint.iniciarProgramado();
+
     const gracefulShutdown = (signal) => {
       console.log(`\n⚠️  Recibida señal ${signal}. Cerrando servidor...`);
       planificador.detenerTodas();
       moldes.detenerProgramado();
       ti.detenerProgramado();
       customerService.detenerProgramado();
+      sharePoint.detenerProgramado();
       server.close(() => {
         console.log("✅ Servidor cerrado correctamente");
         db.pool.end(() => {
