@@ -1,9 +1,9 @@
 const fsp = require("fs/promises");
-const path = require("path");
 const crypto = require("crypto");
 const cron = require("node-cron");
 const db = require("../config/database");
 const { parsearCapex, parsearIniziative, leerLibro } = require("../utils/capexExcelParser");
+const { elegirArchivo, explicarError } = require("../utils/libroPorRevision");
 
 /**
  * Sincronización del plan de CAPEX desde la carpeta de red.
@@ -17,69 +17,13 @@ const { parsearCapex, parsearIniziative, leerLibro } = require("../utils/capexEx
  * ---------------------------------------------------------------------------
  * El libro se guarda como un archivo nuevo en cada revisión, y en la carpeta
  * conviven 'Rev 02', 'Rev 03' y 'Rev 04'. Se configura el principio del nombre
- * y en cada vuelta se elige el de número de Rev más alto. Si dos tienen la
- * misma Rev, gana el más reciente. Los temporales de Excel ('~$...') se
- * ignoran: existen mientras alguien tiene el libro abierto.
+ * y en cada vuelta se elige el de número de Rev más alto (ver
+ * `utils/libroPorRevision.js`, que comparte con AIMS).
  */
 
 const CADA_MINUTOS = Number(process.env.CAPEX_SYNC_MINUTOS || 20);
 const MAXIMO_BYTES = Number(process.env.CAPEX_MAX_BYTES || 30 * 1024 * 1024);
 const LOTE = 500;
-
-/** Traduce los errores del sistema de archivos a algo que se entienda. */
-function explicarError(e, ruta) {
-  switch (e.code) {
-    case "ENOENT":
-      return `No se encontró "${ruta}".`;
-    case "EACCES":
-    case "EPERM":
-      return `Sin permiso para leer "${ruta}". La cuenta con la que corre el backend necesita acceso de lectura al recurso compartido.`;
-    case "EBUSY":
-      return "El archivo está en uso. Se reintenta en la siguiente vuelta.";
-    case "ETIMEDOUT":
-    case "ENETUNREACH":
-    case "EHOSTUNREACH":
-      return `No se pudo llegar al servidor de archivos (${e.code}). Revisar la red.`;
-    default:
-      return `${e.code || "Error"} al leer "${ruta}": ${e.message}`;
-  }
-}
-
-const normal = (s) =>
-  String(s || "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().trim();
-
-/**
- * Elige el libro vigente de la carpeta: el de la Rev más alta.
- *
- * @returns {Object} { archivo, revision, ruta }
- */
-async function elegirArchivo(config) {
-  const nombres = await fsp.readdir(config.carpeta);
-  const prefijo = normal(config.patron);
-
-  const candidatos = [];
-  for (const n of nombres) {
-    if (n.startsWith("~$") || !/\.xls[xm]$/i.test(n)) continue;
-    if (!normal(n).startsWith(prefijo)) continue;
-    const m = n.match(/rev\.?\s*0*(\d+)/i);
-    const ruta = path.win32.join(config.carpeta, n);
-    const st = await fsp.stat(ruta);
-    candidatos.push({ archivo: n, revision: m ? Number(m[1]) : null, ruta, mtime: st.mtimeMs });
-  }
-
-  if (candidatos.length === 0) {
-    const libros = nombres.filter((n) => /\.xls[xm]$/i.test(n) && !n.startsWith("~$"));
-    const e = new Error(
-      `En la carpeta no hay ningún Excel que empiece con "${config.patron}". ` +
-        (libros.length ? `Hay: ${libros.join(", ")}.` : "No hay ningún Excel."),
-    );
-    e.sinCandidatos = true;
-    throw e;
-  }
-
-  candidatos.sort((a, b) => (b.revision ?? -1) - (a.revision ?? -1) || b.mtime - a.mtime);
-  return candidatos[0];
-}
 
 async function configDe() {
   const { rows } = await db.query("SELECT * FROM capex_archivo WHERE clave = 'CAPEX'");

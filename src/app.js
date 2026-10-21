@@ -64,6 +64,7 @@ app.use("/api/customer-service", require("./routes/customerServiceRoutes"));
 app.use("/api/compras", require("./routes/comprasRoutes"));
 app.use("/api/sharepoint", require("./routes/sharePointRoutes"));
 app.use("/api/capex", require("./routes/capexRoutes"));
+app.use("/api/aims", require("./routes/aimsRoutes"));
 
 app.use(notFound);
 app.use(errorHandler);

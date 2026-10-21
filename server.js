@@ -8,6 +8,7 @@ const ti = require("./src/services/sincronizarTi.service");
 const customerService = require("./src/services/sincronizarCustomerService.service");
 const sharePoint = require("./src/services/sincronizarSharePoint.service");
 const capex = require("./src/services/sincronizarCapex.service");
+const aims = require("./src/services/sincronizarAims.service");
 const comprasEnvio = require("./src/services/enviarCompras.service");
 const comprasAvisos = require("./src/services/avisosCompras.service");
 
@@ -61,6 +62,10 @@ const startServer = async () => {
     // cada revisión y se toma la Rev más alta de la carpeta.
     capex.iniciarProgramado();
 
+    // AIMS: igual que CAPEX, la rev más alta del libro de indicadores. Nace
+    // apagado hasta que se configure la carpeta en "Archivo de AIMS".
+    aims.iniciarProgramado();
+
     const gracefulShutdown = (signal) => {
       console.log(`\n⚠️  Recibida señal ${signal}. Cerrando servidor...`);
       planificador.detenerTodas();
@@ -69,6 +74,7 @@ const startServer = async () => {
       customerService.detenerProgramado();
       sharePoint.detenerProgramado();
       capex.detenerProgramado();
+      aims.detenerProgramado();
       server.close(() => {
         console.log("✅ Servidor cerrado correctamente");
         db.pool.end(() => {
