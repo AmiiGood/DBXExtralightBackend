@@ -7,6 +7,7 @@ const moldes = require("./src/services/sincronizarMoldes.service");
 const ti = require("./src/services/sincronizarTi.service");
 const customerService = require("./src/services/sincronizarCustomerService.service");
 const sharePoint = require("./src/services/sincronizarSharePoint.service");
+const capex = require("./src/services/sincronizarCapex.service");
 const comprasEnvio = require("./src/services/enviarCompras.service");
 const comprasAvisos = require("./src/services/avisosCompras.service");
 
@@ -56,6 +57,10 @@ const startServer = async () => {
     // pantalla de carga. Sin credenciales en el .env simplemente no se programa.
     sharePoint.iniciarProgramado();
 
+    // CAPEX: igual que Customer Service, pero el nombre del libro cambia con
+    // cada revisión y se toma la Rev más alta de la carpeta.
+    capex.iniciarProgramado();
+
     const gracefulShutdown = (signal) => {
       console.log(`\n⚠️  Recibida señal ${signal}. Cerrando servidor...`);
       planificador.detenerTodas();
@@ -63,6 +68,7 @@ const startServer = async () => {
       ti.detenerProgramado();
       customerService.detenerProgramado();
       sharePoint.detenerProgramado();
+      capex.detenerProgramado();
       server.close(() => {
         console.log("✅ Servidor cerrado correctamente");
         db.pool.end(() => {
