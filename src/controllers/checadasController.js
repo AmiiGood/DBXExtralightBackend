@@ -34,7 +34,8 @@ const getFiltros = catchAsync(async (req, res) => {
  * @query desde, hasta   fechas del TURNO (AAAA-MM-DD); obligatorias
  * @query turno          C,A,B
  * @query departamento   lista separada por comas
- * @query estado         A_TIEMPO,TOLERANCIA,RETARDO
+ * @query estado         A_TIEMPO,TOLERANCIA,RETARDO (cómo llegó)
+ * @query salida         ANTES (salió antes del fin del turno) | SIN (sin salida)
  * @query q              nombre o ID
  */
 const getReporte = catchAsync(async (req, res) => {
@@ -51,6 +52,7 @@ const getReporte = catchAsync(async (req, res) => {
       turnos: lista(req.query.turno),
       departamentos: lista(req.query.departamento),
       estados: lista(req.query.estado),
+      salida: ["ANTES", "SIN"].includes(req.query.salida) ? req.query.salida : undefined,
       q: req.query.q,
     }),
   );
