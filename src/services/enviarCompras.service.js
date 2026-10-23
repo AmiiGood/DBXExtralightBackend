@@ -44,8 +44,22 @@ const escapar = (s) =>
 
 const parrafos = (s) => escapar(s).replace(/\r?\n/g, "<br />");
 
-/** Data URI en base64: osTicket hace urldecode si no lo es, y un "+" se volvería espacio. */
+/** Data URI en base64, para los adjuntos: "data:image/jpeg;base64,…". */
 const dataUri = (mime, buffer) => `data:${mime};base64,${Buffer.from(buffer).toString("base64")}`;
+
+/**
+ * El cuerpo del ticket: "data:text/html;charset=utf-8," + el HTML tal cual.
+ *
+ * NO en base64. osTicket 1.14.5 lee los parámetros del data URI con un bug
+ * (Format::parseRfc2397 hace explode('=', $extra) en vez de explode('=', $p)):
+ * con "charset=utf-8;base64" toma "utf-8;base64" como el charset y nunca ve el
+ * base64, así que el ticket llegaba con el texto codificado (PHA+U29saWNpdG8…).
+ * Y con solo ";base64", sin charset, supone ISO-8859-1 y convierte: "batería"
+ * llegaría como "baterÃ­a". Con un solo parámetro, charset=utf-8, lee bien el
+ * charset y no toca el contenido. Los adjuntos sí van en base64 porque no
+ * llevan charset y ahí el bug no estorba.
+ */
+const mensajeHtml = (html) => `data:text/html;charset=utf-8,${html}`;
 
 const COMO = { GERENTE: "gerente", SUPLENTE: "suplente", PROPIA: "la pidió el gerente del área" };
 
@@ -225,7 +239,7 @@ async function enviar(id, { forzar = false } = {}) {
         name: sol.solicitante,
         email: sol.email,
         subject: asuntoTicket(sol).slice(0, 255),
-        message: dataUri("text/html;charset=utf-8", Buffer.from(cuerpoTicket(sol), "utf8")),
+        message: mensajeHtml(cuerpoTicket(sol)),
         topicId: sol.osticket_topic_id,
         attachments: adjuntos,
       }),
