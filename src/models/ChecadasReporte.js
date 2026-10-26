@@ -184,13 +184,56 @@ async function filtros() {
   };
 }
 
+/** Minúsculas, sin acentos y sin espacios de más: "Peña" y "pena" se encuentran igual. */
+const sinAcentos = (s) =>
+  String(s || "")
+    .normalize("NFD")
+    .replace(/[̀-ͯ]/g, "")
+    .toLowerCase()
+    .replace(/\s+/g, " ")
+    .trim();
+
+const sinCeros = (s) => String(s).replace(/^0+(?=\d)/, "");
+
+/**
+ * La búsqueda del reporte.
+ *
+ *   Solo dígitos  → la nómina EXACTA: "8" es la 8, no la 87 ni la 1081.
+ *                   Los ceros a la izquierda no importan ("0008" = "8").
+ *   Texto         → en el nombre, sin importar acentos ni mayúsculas, y con
+ *                   todas sus palabras en cualquier orden: "jose perez" encuentra
+ *                   a "José Luis Pérez".
+ */
+function coincideBusqueda(nombre, empleadoId, q) {
+  const t = String(q || "").trim();
+  if (!t) return true;
+  if (/^\d+$/.test(t)) return sinCeros(empleadoId) === sinCeros(t);
+  const n = sinAcentos(nombre);
+  return sinAcentos(t).split(" ").every((palabra) => n.includes(palabra));
+}
+
+/**
+ * ¿La hora de entrada ('HH:MM') cae en el rango? Los dos extremos cuentan.
+ *
+ * Si "desde" es mayor que "hasta" el rango cruza la medianoche: de 23:30 a
+ * 00:20 es la llegada del turno C.
+ */
+function enRangoHoras(hora, desde, hasta) {
+  if (desde && hasta) return desde <= hasta ? hora >= desde && hora <= hasta : hora >= desde || hora <= hasta;
+  if (desde) return hora >= desde;
+  if (hasta) return hora <= hasta;
+  return true;
+}
+
 /**
  * El reporte de un rango de fechas.
  *
  * Las fechas son del TURNO: el C del 22 incluye a quien checó el 21 a las 23:45.
  * Por eso se leen las checadas desde un día antes y hasta un día después.
  *
- * @param {Object} f { desde, hasta, turnos[], departamentos[], estados[], salida, q }
+ * @param {Object} f { desde, hasta, horaDesde, horaHasta, turnos[], departamentos[],
+ *                     estados[], salida, q }
+ *   horaDesde/horaHasta: 'HH:MM', sobre la hora de ENTRADA de la jornada
  *   salida: 'ANTES' (salieron antes de terminar el turno) | 'SIN' (sin salida)
  */
 async function reporte(f) {
@@ -203,14 +246,14 @@ async function reporte(f) {
     [f.desde, f.hasta],
   );
 
-  const q = (f.q || "").trim().toLowerCase();
   const jornadas = armarJornadas(rows, listaTurnos).filter(
     (j) =>
       j.fechaTurno >= f.desde &&
       j.fechaTurno <= f.hasta &&
       (!f.turnos?.length || f.turnos.includes(j.turno)) &&
       (!f.departamentos?.length || f.departamentos.includes(j.departamento)) &&
-      (!q || j.empleado_id.includes(q) || (j.nombre || "").toLowerCase().includes(q)),
+      enRangoHoras(j.hora, f.horaDesde, f.horaHasta) &&
+      coincideBusqueda(j.nombre, j.empleado_id, f.q),
   );
 
   let llegadas = jornadas;
@@ -275,4 +318,4 @@ async function reporte(f) {
   };
 }
 
-module.exports = { filtros, reporte, asignarTurno, armarJornadas, turnos };
+module.exports = { filtros, reporte, asignarTurno, armarJornadas, turnos, coincideBusqueda, enRangoHoras };

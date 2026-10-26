@@ -16,6 +16,7 @@ function lista(v) {
 }
 
 const esFecha = (s) => /^\d{4}-\d{2}-\d{2}$/.test(String(s || ""));
+const esHora = (s) => /^([01]\d|2[0-3]):[0-5]\d(:[0-5]\d)?$/.test(String(s || ""));
 
 // =============================================
 // REPORTE
@@ -36,12 +37,16 @@ const getFiltros = catchAsync(async (req, res) => {
  * @query departamento   lista separada por comas
  * @query estado         A_TIEMPO,TOLERANCIA,RETARDO (cómo llegó)
  * @query salida         ANTES (salió antes del fin del turno) | SIN (sin salida)
- * @query q              nombre o ID
+ * @query horaDesde, horaHasta  HH:MM, sobre la hora de entrada; si desde > hasta
+ *                       cruza la medianoche (23:30 a 00:20)
+ * @query q              nómina exacta (solo dígitos) o nombre, sin importar acentos
  */
 const getReporte = catchAsync(async (req, res) => {
   const { desde, hasta } = req.query;
   if (!esFecha(desde) || !esFecha(hasta)) throw new AppError("Falta el rango de fechas", 400);
   if (desde > hasta) throw new AppError("La fecha inicial es mayor que la final", 400);
+  const horaDesde = esHora(req.query.horaDesde) ? req.query.horaDesde.slice(0, 5) : undefined;
+  const horaHasta = esHora(req.query.horaHasta) ? req.query.horaHasta.slice(0, 5) : undefined;
 
   sendSuccess(
     res,
@@ -49,6 +54,8 @@ const getReporte = catchAsync(async (req, res) => {
     await Reporte.reporte({
       desde,
       hasta,
+      horaDesde,
+      horaHasta,
       turnos: lista(req.query.turno),
       departamentos: lista(req.query.departamento),
       estados: lista(req.query.estado),
