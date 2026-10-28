@@ -11,6 +11,7 @@ const capex = require("./src/services/sincronizarCapex.service");
 const aims = require("./src/services/sincronizarAims.service");
 const comprasEnvio = require("./src/services/enviarCompras.service");
 const comprasAvisos = require("./src/services/avisosCompras.service");
+const tipoCambio = require("./src/services/tipoCambio.service");
 
 const PORT = process.env.PORT || 3000;
 
@@ -66,6 +67,10 @@ const startServer = async () => {
     // apagado hasta que se configure la carpeta en "Archivo de AIMS".
     aims.iniciarProgramado();
 
+    // Tipo de cambio FIX de Banxico para los reportes en dólares (Gasto Q4).
+    // Sin BANXICO_TOKEN no se programa y la vista en dólares se apaga.
+    tipoCambio.iniciarProgramado();
+
     const gracefulShutdown = (signal) => {
       console.log(`\n⚠️  Recibida señal ${signal}. Cerrando servidor...`);
       planificador.detenerTodas();
@@ -75,6 +80,7 @@ const startServer = async () => {
       sharePoint.detenerProgramado();
       capex.detenerProgramado();
       aims.detenerProgramado();
+      tipoCambio.detenerProgramado();
       server.close(() => {
         console.log("✅ Servidor cerrado correctamente");
         db.pool.end(() => {
