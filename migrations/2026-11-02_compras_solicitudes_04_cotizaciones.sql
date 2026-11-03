@@ -41,7 +41,7 @@ UPDATE public.compras_areas SET nombre = 'Planeación', actualizado_en = now()
  WHERE osticket_topic_id = 15 AND nombre <> 'Planeación';
 
 INSERT INTO public.compras_areas (nombre, osticket_topic_id) VALUES
-  ('Inyección Suela y Almacén', 41),
+  ('Inyección Suela y Almohada', 41),
   ('Inyección Crocs',           42),
   ('Producción Ensamble',       43),
   ('HSE',                       44)

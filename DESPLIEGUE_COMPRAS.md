@@ -39,8 +39,8 @@ En el servidor de producción, desde la carpeta del backend, con el `.env` que
 apunta a `dbx_ensayo`. Primero simuladas (validan y se revierten), luego de verdad:
 
 ```bash
-node scripts/aplicar-migracion.js 2026-10-02_compras_solicitudes_01_schema.sql 2026-10-02_compras_solicitudes_02_envio_osticket.sql 2026-10-02_compras_solicitudes_03_avisos.sql 2026-11-02_compras_solicitudes_04_cotizaciones.sql --simular
-node scripts/aplicar-migracion.js 2026-10-02_compras_solicitudes_01_schema.sql 2026-10-02_compras_solicitudes_02_envio_osticket.sql 2026-10-02_compras_solicitudes_03_avisos.sql 2026-11-02_compras_solicitudes_04_cotizaciones.sql
+node scripts/aplicar-migracion.js 2026-10-02_compras_solicitudes_01_schema.sql 2026-10-02_compras_solicitudes_02_envio_osticket.sql 2026-10-02_compras_solicitudes_03_avisos.sql 2026-11-02_compras_solicitudes_04_cotizaciones.sql 2026-11-03_compras_solicitudes_05_nombre_tema_41.sql --simular
+node scripts/aplicar-migracion.js 2026-10-02_compras_solicitudes_01_schema.sql 2026-10-02_compras_solicitudes_02_envio_osticket.sql 2026-10-02_compras_solicitudes_03_avisos.sql 2026-11-02_compras_solicitudes_04_cotizaciones.sql 2026-11-03_compras_solicitudes_05_nombre_tema_41.sql
 ```
 
 | Migración | Qué hace |
@@ -48,9 +48,10 @@ node scripts/aplicar-migracion.js 2026-10-02_compras_solicitudes_01_schema.sql 2
 | `01_schema` | Tablas de áreas de Compras (los 12 temas de osTicket, **sin gerentes**), solicitudes, archivos y bitácora; columna `areas.compras_area_id`; módulos "Solicitudes de Compra" y "Aprobadores de Compras". Liga por nombre las áreas de DBX `TI`, `Calidad` y `Ensamble` si existen. |
 | `02_envio_osticket` | Candado de envío (`enviando_desde`) y ajuste de la restricción de EN_COMPRAS. |
 | `03_avisos` | Configuración de avisos (L–V 9:00 y 16:00), bitácora de correos, módulo "Reportes de Compras". |
-| `04_cotizaciones` | Estados COTIZADA y ELEGIDA, tablas del comparativo de proveedores (partidas, opciones, precios, fotos), asignado del ticket, monto elegido; módulo "Cotizaciones de Compras". Además acomoda los temas nuevos de osticketadm: agrega 41 Inyección Suela y Almacén, 42 Inyección Crocs, 43 Producción Ensamble y 44 HSE (**sin gerentes**), deja el 15 solo como **Planeación** y pasa a su tema nuevo las áreas de DBX que cargaban al 15 y se reconocen por nombre (ensamble, crocs, suela, HSE). |
+| `04_cotizaciones` | Estados COTIZADA y ELEGIDA, tablas del comparativo de proveedores (partidas, opciones, precios, fotos), asignado del ticket, monto elegido; módulo "Cotizaciones de Compras". Además acomoda los temas nuevos de osticketadm: agrega 41 Inyección Suela y Almohada, 42 Inyección Crocs, 43 Producción Ensamble y 44 HSE (**sin gerentes**), deja el 15 solo como **Planeación** y pasa a su tema nuevo las áreas de DBX que cargaban al 15 y se reconocen por nombre (ensamble, crocs, suela, HSE). |
+| `05_nombre_tema_41` | Corrige el nombre del tema 41: es **Inyección Suela y Almohada** (la 04 lo había dado de alta como "…y Almacén"). |
 
-Las cuatro son idempotentes: si una falla a la mitad se puede volver a correr.
+Las cinco son idempotentes: si una falla a la mitad se puede volver a correr.
 
 ## 4. Variables del `.env` de producción (backend)
 
@@ -122,7 +123,7 @@ Si sale `sin OSTICKET_COMPRAS_API_URL/KEY`, falta el paso 4 o el 6.
       osticketadm. Mientras alguno no tenga usuario, el jefe ve sus tickets
       marcados "Sin usuario en el DBX" y puede cotizarlos él.
 - [ ] **Temas nuevos**: en Aprobadores, asignar gerente a Inyección Suela y
-      Almacén, Inyección Crocs, Producción Ensamble, HSE y Planeación, y revisar
+      Almohada, Inyección Crocs, Producción Ensamble, HSE y Planeación, y revisar
       que cada área de DBX apunte al tema correcto (la migración solo movió las que
       reconoció por nombre).
 
