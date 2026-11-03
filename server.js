@@ -12,6 +12,7 @@ const aims = require("./src/services/sincronizarAims.service");
 const comprasEnvio = require("./src/services/enviarCompras.service");
 const comprasAvisos = require("./src/services/avisosCompras.service");
 const tipoCambio = require("./src/services/tipoCambio.service");
+const comprasAsignados = require("./src/services/asignadosCompras.service");
 
 const PORT = process.env.PORT || 3000;
 
@@ -49,6 +50,10 @@ const startServer = async () => {
     // por omisión; se cambia en Aprobadores de Compras)
     comprasAvisos.iniciarProgramado();
 
+    // A quién tiene asignado cada ticket de Compras en osTicket: de ahí sale
+    // qué ve cada agente en Cotizaciones. Cada 5 minutos.
+    comprasAsignados.iniciarProgramado();
+
     // Customer Service no replica una base: vigila dos archivos en una
     // carpeta de red y los relee cuando cambian. Si el servidor no alcanza
     // el recurso compartido, lo anota y sigue: no tumba el arranque.
@@ -81,6 +86,7 @@ const startServer = async () => {
       capex.detenerProgramado();
       aims.detenerProgramado();
       tipoCambio.detenerProgramado();
+      comprasAsignados.detenerProgramado();
       server.close(() => {
         console.log("✅ Servidor cerrado correctamente");
         db.pool.end(() => {

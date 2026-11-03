@@ -14,7 +14,7 @@ const { AppError } = require("../utils/errorHandler");
  *   - Si quien pide es el suplente, la tiene que aprobar el gerente.
  */
 
-const ESTADOS = ["PENDIENTE", "APROBADA", "RECHAZADA", "CANCELADA", "EN_COMPRAS"];
+const ESTADOS = ["PENDIENTE", "APROBADA", "RECHAZADA", "CANCELADA", "EN_COMPRAS", "COTIZADA", "ELEGIDA"];
 
 // Fechas como texto en hora de planta: la conexión ya trae la zona de México y
 // así no las mueve el JSON del navegador.
@@ -26,6 +26,12 @@ const SELECT_SOLICITUD = `
          ${F("s.decidido_en")} AS decidido_en,
          ${F("s.enviado_en")}  AS enviado_en,
          s.osticket_numero,
+         s.osticket_estado,
+         s.asignado_nombre,
+         s.opcion_elegida_id,
+         s.monto_elegido::float AS monto_elegido,
+         s.moneda_elegida,
+         ${F("s.elegido_en")}  AS elegido_en,
          s.intentos_envio,
          s.ultimo_error_envio,
          s.compras_area_id,
@@ -261,15 +267,34 @@ class CompraSolicitud {
       ),
     ]);
 
+    // Las opciones de Compras, una vez enviadas. Se requiere aquí y no arriba
+    // para no cargar el modelo de cotizaciones en cada consulta de la bandeja.
+    const { cotizacion, descartadas } = ["COTIZADA", "ELEGIDA"].includes(sol.estado)
+      ? await require("./CompraCotizacion").paraSolicitante(id)
+      : { cotizacion: null, descartadas: 0 };
+
     return {
       ...sol,
       archivos: archivos.rows,
       eventos: eventos.rows,
+      cotizacion,
+      descartadas,
       permisos: {
         decidir: p.puedeDecidir && sol.estado === "PENDIENTE",
         cancelar: p.esSolicitante && sol.estado === "PENDIENTE",
+        // Solo quien pidió elige; su gerente puede ver las opciones
+        elegir: p.esSolicitante && sol.estado === "COTIZADA",
       },
     };
+  }
+
+  /** Cuántas de sus solicitudes esperan que el usuario elija proveedor. */
+  static async contarPorElegir(usuarioId) {
+    const { rows } = await db.query(
+      `SELECT count(*)::int AS n FROM compras_solicitudes WHERE solicitante_id = $1 AND estado = 'COTIZADA'`,
+      [usuarioId],
+    );
+    return rows[0].n;
   }
 
   /** Datos de un archivo, solo si el usuario puede ver su solicitud. */

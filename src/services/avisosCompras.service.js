@@ -328,12 +328,169 @@ async function avisarEnCompras(id) {
             ? "Como la pediste siendo gerente del área, pasó directo."
             : `La aprobó <b>${escapar(s.decidio)}</b>.${s.comentario ? ` Comentó: “${parrafos(s.comentario)}”` : ""}`
         }</p>
-        <p>Compras la recibió como el ticket <b>${escapar(s.osticket_numero)}</b>. Lo que siga
-           (cotización, dudas, entrega) te lo contestará Compras por ese ticket.</p>`,
+        <p>Compras la recibió como el ticket <b>${escapar(s.osticket_numero)}</b>. Cuando tengan
+           opciones de proveedores te llegarán aquí, en el DBX, para que elijas la mejor. Dudas y
+           entrega las verás por ese ticket.</p>`,
       boton: { texto: "Ver la solicitud", url: enlace({ id }) },
     }),
     texto: `${s.folio} ya está en Compras como ticket ${s.osticket_numero}.`,
   });
+}
+
+// ---------------------------------------------------------------------------
+// Cotizaciones
+// ---------------------------------------------------------------------------
+
+const enlaceCotizaciones = (params = {}) => {
+  const q = new URLSearchParams(params).toString();
+  return `${urlApp()}/compras/cotizaciones${q ? `?${q}` : ""}`;
+};
+
+const dinero = (n, moneda) =>
+  `$${Number(n).toLocaleString("es-MX", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ${moneda}`;
+
+/** A quién de Compras avisarle: quien mandó las opciones y quien tiene el ticket ahora. */
+async function genteDeCompras(solicitudId) {
+  const { rows } = await db.query(
+    `SELECT s.asignado_email, s.asignado_nombre, u.id, u.email
+       FROM compras_solicitudes s
+       LEFT JOIN compras_cotizaciones c ON c.solicitud_id = s.id AND c.estado IN ('ENVIADA', 'DESCARTADA')
+       LEFT JOIN usuarios u ON u.id = c.enviada_por AND u.activo
+      WHERE s.id = $1
+      ORDER BY c.enviada_en DESC NULLS LAST
+      LIMIT 1`,
+    [solicitudId],
+  );
+  const r = rows[0] || {};
+  const lista = [];
+  if (r.email) lista.push({ id: r.id, email: r.email });
+  if (r.asignado_email && !lista.some((u) => u.email.toLowerCase() === r.asignado_email)) {
+    lista.push({ id: null, email: r.asignado_email });
+  }
+  return lista;
+}
+
+/** A quien pidió: Compras le mandó opciones para elegir. */
+async function avisarCotizada(id) {
+  if (!(await avisosEncendidos())) return;
+  const s = await datosSolicitud(id);
+  if (s.estado !== "COTIZADA") return;
+  const { cotizacion: c } = await require("../models/CompraCotizacion").paraSolicitante(id);
+  if (!c) return;
+
+  const filas = c.opciones
+    .map(
+      (o) => `
+      <tr>
+        <td style="padding:6px 10px;border-bottom:1px solid #f0f0f0">${escapar(o.proveedor)}${
+          o.id === c.masBarata ? ' <span style="color:#15803d;font-size:12px">· la más barata</span>' : ""
+        }${o.completa ? "" : '<br /><span style="color:#b45309;font-size:12px">No cotizó todas las partidas</span>'}</td>
+        <td style="padding:6px 10px;border-bottom:1px solid #f0f0f0;text-align:right;white-space:nowrap"><b>${dinero(o.total, o.moneda)}</b></td>
+        <td style="padding:6px 10px;border-bottom:1px solid #f0f0f0">${escapar(o.tiempo_entrega || "—")}</td>
+        <td style="padding:6px 10px;border-bottom:1px solid #f0f0f0">${escapar(o.credito || "—")}</td>
+      </tr>`,
+    )
+    .join("");
+
+  await mandar({
+    tipo: "COTIZADA",
+    solicitudId: id,
+    usuario: solicitanteDe(s),
+    asunto: `Elige proveedor para tu solicitud ${s.folio} (${c.opciones.length} opciones)`,
+    html: plantilla({
+      titulo: "Compras te mandó opciones de proveedores",
+      subtitulo: `${escapar(s.folio)} · ${escapar(s.asunto)} · ticket ${escapar(s.osticket_numero)}`,
+      cuerpo: `
+        <p><b>${escapar(c.enviada_por_nombre || "Compras")}</b> cotizó con ${c.opciones.length} proveedor${
+          c.opciones.length === 1 ? "" : "es"
+        }. Los precios ${c.incluye_iva ? "incluyen IVA" : "son más IVA"}.</p>
+        ${c.mensaje ? `<div style="background:#f9fafb;border-radius:6px;padding:10px 12px;font-size:14px">${parrafos(c.mensaje)}</div>` : ""}
+        <table style="border-collapse:collapse;width:100%;font-size:14px;margin-top:10px">
+          <thead>
+            <tr style="background:#236093;color:#fff">
+              <th style="padding:8px 10px;text-align:left">Proveedor</th>
+              <th style="padding:8px 10px;text-align:right">Total</th>
+              <th style="padding:8px 10px;text-align:left">Entrega</th>
+              <th style="padding:8px 10px;text-align:left">Crédito</th>
+            </tr>
+          </thead>
+          <tbody>${filas}</tbody>
+        </table>
+        <p style="font-size:14px;color:#6b7280">En el DBX ves el detalle por partida y las fotos. Hasta que elijas,
+          Compras no puede seguir.</p>`,
+      boton: { texto: "Ver y elegir", url: enlace({ id }) },
+    }),
+    texto: `Compras te mandó ${c.opciones.length} opciones para ${s.folio}. Elige en ${enlace({ id })}`,
+  });
+}
+
+/** A Compras: el solicitante eligió proveedor. */
+async function avisarElegida(id) {
+  if (!(await avisosEncendidos())) return;
+  const s = await datosSolicitud(id);
+  if (s.estado !== "ELEGIDA") return;
+  const { rows } = await db.query(
+    `SELECT o.proveedor, s.monto_elegido::float AS monto, s.moneda_elegida AS moneda, c.incluye_iva,
+            (SELECT e.detalle FROM compras_solicitud_eventos e
+              WHERE e.solicitud_id = s.id AND e.tipo = 'ELEGIDA' ORDER BY e.id DESC LIMIT 1) AS detalle
+       FROM compras_solicitudes s
+       JOIN compras_cotizacion_opciones o ON o.id = s.opcion_elegida_id
+       JOIN compras_cotizaciones c ON c.id = o.cotizacion_id
+      WHERE s.id = $1`,
+    [id],
+  );
+  const e = rows[0];
+  if (!e) return;
+  const comentario = (e.detalle || "").split(" — ").slice(1).join(" — ");
+  for (const u of await genteDeCompras(id)) {
+    await mandar({
+      tipo: "ELEGIDA",
+      solicitudId: id,
+      usuario: u,
+      asunto: `${s.folio} (${s.osticket_numero}): eligió ${e.proveedor} por ${dinero(e.monto, e.moneda)}`,
+      html: plantilla({
+        titulo: "Ya eligieron proveedor",
+        subtitulo: `${escapar(s.folio)} · ticket ${escapar(s.osticket_numero)} · ${escapar(s.asunto)}`,
+        cuerpo: `
+          <p><b>${escapar(s.solicitante)}</b> (${escapar(s.area)}) eligió a <b>${escapar(e.proveedor)}</b>
+             por <b>${dinero(e.monto, e.moneda)}</b> ${e.incluye_iva ? "con IVA" : "+ IVA"}.</p>
+          ${comentario ? `<p>Comentó: “${parrafos(comentario)}”</p>` : ""}`,
+        boton: { texto: "Ver la solicitud", url: enlaceCotizaciones({ vista: "elegidas", id }) },
+      }),
+      texto: `${s.solicitante} eligió ${e.proveedor} por ${dinero(e.monto, e.moneda)} en ${s.folio}.`,
+    });
+  }
+}
+
+/** A Compras: ninguna opción le sirvió al solicitante. */
+async function avisarOtrasOpciones(id) {
+  if (!(await avisosEncendidos())) return;
+  const s = await datosSolicitud(id);
+  if (s.estado !== "EN_COMPRAS") return;
+  const { rows } = await db.query(
+    `SELECT detalle FROM compras_solicitud_eventos WHERE solicitud_id = $1 AND tipo = 'OTRAS_OPCIONES'
+      ORDER BY id DESC LIMIT 1`,
+    [id],
+  );
+  for (const u of await genteDeCompras(id)) {
+    await mandar({
+      tipo: "OTRAS_OPCIONES",
+      solicitudId: id,
+      usuario: u,
+      asunto: `${s.folio} (${s.osticket_numero}): pide otras opciones`,
+      html: plantilla({
+        titulo: "Ninguna opción le sirvió",
+        subtitulo: `${escapar(s.folio)} · ticket ${escapar(s.osticket_numero)} · ${escapar(s.asunto)}`,
+        cuerpo: `
+          <p><b>${escapar(s.solicitante)}</b> pide que se busquen otras opciones:</p>
+          <div style="background:#fffbeb;border-left:3px solid #d97706;padding:10px 12px;font-size:14px">
+            ${parrafos(rows[0]?.detalle || "")}
+          </div>`,
+        boton: { texto: "Cotizar de nuevo", url: enlaceCotizaciones({ id }) },
+      }),
+      texto: `${s.solicitante} pide otras opciones para ${s.folio}: ${rows[0]?.detalle || ""}`,
+    });
+  }
 }
 
 /**
@@ -497,6 +654,9 @@ module.exports = {
   avisarRechazada,
   avisarAprobada,
   avisarEnCompras,
+  avisarCotizada,
+  avisarElegida,
+  avisarOtrasOpciones,
   mandarRecordatorios,
   mandarPrueba,
   ultimosCorreos,

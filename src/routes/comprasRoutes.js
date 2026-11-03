@@ -1,6 +1,7 @@
 const express = require("express");
 const router = express.Router();
 const controller = require("../controllers/comprasController");
+const cotizaciones = require("../controllers/cotizacionesComprasController");
 const { authenticate } = require("../middlewares/auth");
 const { puedeLeer, puedeCrear, puedeEditar } = require("../middlewares/permisos");
 const { recibirArchivos } = require("../services/comprasArchivos.service");
@@ -9,6 +10,9 @@ const MODULO = "/compras/solicitudes";
 // Configurar quién aprueba es otra cosa que pedir: va por separado
 const MODULO_APROBADORES = "/compras/aprobadores";
 const MODULO_REPORTES = "/compras/reportes";
+// Leer = ver lo asignado; crear = cotizar; editar = ver todo (jefe de Compras).
+// Lo de "ver todo" lo resuelve el modelo, aquí basta con leer o crear.
+const MODULO_COTIZACIONES = "/compras/cotizaciones";
 
 // =============================================
 // SOLICITUDES
@@ -179,5 +183,79 @@ router.put(
   puedeEditar(MODULO_APROBADORES),
   controller.putAreaDbx,
 );
+
+// =============================================
+// COTIZACIONES
+//
+// Compras captura las opciones de proveedores y las manda; quien pidió elige.
+// Elegir y pedir otras opciones solo piden abrir Solicitudes: que sea quien
+// pidió lo revisa el modelo.
+// =============================================
+
+/**
+ * @route   GET /api/compras/cotizaciones?vista=por-cotizar|esperando|elegidas
+ * @desc    Lo que el agente tiene asignado en osTicket (o todo, para el jefe)
+ */
+router.get("/cotizaciones", authenticate, puedeLeer(MODULO_COTIZACIONES), cotizaciones.getBandeja);
+
+/**
+ * @route   GET /api/compras/cotizaciones/:id
+ * @desc    La solicitud con su borrador, la cotización enviada y las descartadas
+ */
+router.get("/cotizaciones/:id", authenticate, puedeLeer(MODULO_COTIZACIONES), cotizaciones.getSolicitud);
+
+/**
+ * @route   PUT /api/compras/cotizaciones/:id/borrador
+ * @desc    Guarda el comparativo tal como está en pantalla
+ */
+router.put("/cotizaciones/:id/borrador", authenticate, puedeCrear(MODULO_COTIZACIONES), cotizaciones.putBorrador);
+
+/**
+ * @route   POST /api/compras/cotizaciones/:id/archivos
+ * @desc    Fotos y PDF de los proveedores (multipart: archivos[])
+ */
+router.post(
+  "/cotizaciones/:id/archivos",
+  authenticate,
+  puedeCrear(MODULO_COTIZACIONES),
+  recibirArchivos,
+  cotizaciones.postArchivos,
+);
+
+/**
+ * @route   POST /api/compras/cotizaciones/:id/enviar
+ * @desc    Manda las opciones a quien pidió
+ */
+router.post("/cotizaciones/:id/enviar", authenticate, puedeCrear(MODULO_COTIZACIONES), cotizaciones.postEnviar);
+
+/**
+ * @route   GET /api/compras/cotizaciones/:id/solicitud-archivos/:archivoId
+ * @desc    Un adjunto de la solicitud, visto desde Compras
+ */
+router.get(
+  "/cotizaciones/:id/solicitud-archivos/:archivoId",
+  authenticate,
+  puedeLeer(MODULO_COTIZACIONES),
+  cotizaciones.getArchivoSolicitud,
+);
+
+/**
+ * @route   GET /api/compras/cotizacion-archivos/:archivoId
+ * @desc    Foto o PDF de un proveedor. Lo ve Compras y, ya enviada, quien pidió:
+ *          el acceso lo revisa el modelo
+ */
+router.get("/cotizacion-archivos/:archivoId", authenticate, cotizaciones.getArchivoCotizacion);
+
+/**
+ * @route   POST /api/compras/solicitudes/:id/elegir
+ * @desc    Quien pidió elige una opción
+ */
+router.post("/solicitudes/:id/elegir", authenticate, puedeLeer(MODULO), cotizaciones.postElegir);
+
+/**
+ * @route   POST /api/compras/solicitudes/:id/otras-opciones
+ * @desc    Ninguna opción le sirve: regresa a Compras
+ */
+router.post("/solicitudes/:id/otras-opciones", authenticate, puedeLeer(MODULO), cotizaciones.postOtrasOpciones);
 
 module.exports = router;

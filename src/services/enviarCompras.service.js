@@ -151,6 +151,13 @@ async function marcarEnviada(id, { numero, ticketId }, encontrada = false) {
   );
   // A quien pidió, con el número del ticket
   avisos.enSegundoPlano(avisos.avisarEnCompras, id);
+  // osTicket lo asigna al agente del tema al crearlo: que aparezca ya en su
+  // bandeja de Cotizaciones y no hasta la siguiente vuelta
+  setImmediate(() =>
+    require("./asignadosCompras.service")
+      .actualizar()
+      .catch((e) => console.warn("⚠️  Compras: no se leyó el asignado del ticket nuevo —", e.message)),
+  );
 }
 
 async function marcarError(id, mensaje, anterior) {
