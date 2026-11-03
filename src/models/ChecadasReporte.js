@@ -33,8 +33,14 @@ const db = require("../config/database");
  *   - Con los archivos por ventana (7:50 a 8:20) no hay salidas: la columna sale
  *     vacía, que es lo correcto.
  *
+ * HORARIOS ESPECIALES: quien está en `chk_horarios` (administrativos de 8:30 a
+ * 18:00, Compuestos de 12 horas) se compara SOLO contra sus turnos; los demás,
+ * contra los generales (C, A, B). Con la misma regla del inicio más cercano, el
+ * de Compuestos que rola cae solo en el de día o en el de noche.
+ *
  * Todo se calcula al consultar y no se guarda: si se corrige un horario o la
- * tolerancia en `chk_turnos`, lo cargado se recalcula solo.
+ * tolerancia en `chk_turnos`, o se sube otra lista de horarios, lo cargado se
+ * recalcula solo.
  */
 
 const MAX_DETALLE = 10000;
@@ -58,7 +64,7 @@ const sumarDias = (iso, dias) => {
 async function turnos() {
   const { rows } = await db.query(
     `SELECT clave, nombre, to_char(inicio, 'HH24:MI:SS') AS inicio, to_char(fin, 'HH24:MI:SS') AS fin,
-            tolerancia_min, orden
+            tolerancia_min, orden, especial
        FROM chk_turnos ORDER BY orden`,
   );
   return rows.map((t) => {
@@ -95,22 +101,40 @@ function asignarTurno(fecha, hora, listaTurnos) {
   return { turno: mejor.t.clave, fechaTurno: sumarDias(fecha, mejor.dia), minutos, estado, t: mejor.t };
 }
 
+/** Nómina → claves de sus turnos, para quien tiene horario especial. */
+async function horarios() {
+  const { rows } = await db.query("SELECT empleado_id, turnos FROM chk_horarios");
+  return new Map(rows.map((r) => [r.empleado_id, r.turnos]));
+}
+
 /**
  * Arma las jornadas a partir de las checadas (ver arriba).
  *
  * @param {Array} filas  checadas { empleado_id, nombre, departamento, departamento_ruta,
  *                       punto, fecha 'YYYY-MM-DD', hora 'HH:MM:SS' }
+ * @param {Array} listaTurnos  todos, generales y especiales
+ * @param {Map}   horariosEspeciales  nómina → claves de sus turnos
  * @returns {Array} una jornada por persona y turno
  */
-function armarJornadas(filas, listaTurnos) {
+function armarJornadas(filas, listaTurnos, horariosEspeciales = new Map()) {
   const porPersona = new Map();
   for (const f of filas) {
     if (!porPersona.has(f.empleado_id)) porPersona.set(f.empleado_id, []);
     porPersona.get(f.empleado_id).push({ ...f, ts: marca(f.fecha, f.hora) });
   }
 
+  const generales = listaTurnos.filter((t) => !t.especial);
+  // Si un turno de su lista ya no existe se le compara con los generales: mejor
+  // un turno de planta que dejarlo fuera del reporte
+  const turnosDe = (empleado) => {
+    const claves = horariosEspeciales.get(empleado);
+    const suyos = claves ? listaTurnos.filter((t) => claves.includes(t.clave)) : [];
+    return suyos.length ? suyos : generales;
+  };
+
   const jornadas = [];
-  for (const checadas of porPersona.values()) {
+  for (const [empleado, checadas] of porPersona) {
+    const suyos = turnosDe(empleado);
     checadas.sort((a, b) => a.ts - b.ts);
     let actual = null;
     for (const c of checadas) {
@@ -119,7 +143,7 @@ function armarJornadas(filas, listaTurnos) {
         actual.ultima = c;
         continue;
       }
-      const a = asignarTurno(c.fecha, c.hora, listaTurnos);
+      const a = asignarTurno(c.fecha, c.hora, suyos);
       const inicioTurno = Date.parse(`${a.fechaTurno}T00:00:00Z`) / 60000 + a.t.inicioMin;
       actual = {
         primera: c,
@@ -145,6 +169,7 @@ function armarJornadas(filas, listaTurnos) {
       departamento_ruta: p.departamento_ruta,
       punto: p.punto,
       turno: j.asignado.turno,
+      especial: Boolean(j.asignado.t.especial),
       fechaTurno: j.asignado.fechaTurno,
       // Entrada
       fecha: p.fecha,
@@ -237,7 +262,7 @@ function enRangoHoras(hora, desde, hasta) {
  *   salida: 'ANTES' (salieron antes de terminar el turno) | 'SIN' (sin salida)
  */
 async function reporte(f) {
-  const listaTurnos = await turnos();
+  const [listaTurnos, horariosEspeciales] = await Promise.all([turnos(), horarios()]);
   const { rows } = await db.query(
     `SELECT empleado_id, nombre, departamento, departamento_ruta, punto,
             to_char(fecha, 'YYYY-MM-DD') AS fecha, to_char(hora, 'HH24:MI:SS') AS hora
@@ -246,7 +271,7 @@ async function reporte(f) {
     [f.desde, f.hasta],
   );
 
-  const jornadas = armarJornadas(rows, listaTurnos).filter(
+  const jornadas = armarJornadas(rows, listaTurnos, horariosEspeciales).filter(
     (j) =>
       j.fechaTurno >= f.desde &&
       j.fechaTurno <= f.hasta &&

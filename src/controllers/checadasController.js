@@ -5,6 +5,7 @@ const {
   importarArchivo,
   historialCargas,
 } = require("../services/importarChecadas.service");
+const horarios = require("../services/importarHorarios.service");
 const { catchAsync, sendSuccess, AppError } = require("../utils/errorHandler");
 const { registrarLog, obtenerIP, obtenerUserAgent } = require("../utils/logger");
 
@@ -130,4 +131,59 @@ const getHistorialCargas = catchAsync(async (req, res) => {
   sendSuccess(res, 200, await historialCargas());
 });
 
-module.exports = { getFiltros, getReporte, analizarCarga, importarCarga, getHistorialCargas };
+// =============================================
+// HORARIOS ESPECIALES
+// =============================================
+
+/** GET /api/checadas/horarios — la lista vigente agrupada por turnos */
+const getHorarios = catchAsync(async (req, res) => {
+  sendSuccess(res, 200, await horarios.resumen());
+});
+
+/** POST /api/checadas/horarios/analizar — lo que trae el libro, sin escribir */
+const analizarHorarios = catchAsync(async (req, res) => {
+  if (!req.file) throw new AppError("No se recibió ningún archivo", 400);
+  try {
+    sendSuccess(res, 200, { ...(await horarios.analizarArchivo(req.file.path)), archivo: nombreOriginal(req.file) });
+  } catch (e) {
+    throw e instanceof AppError ? e : new AppError(e.message, e.statusCode || 400);
+  } finally {
+    limpiarTemporal(req.file);
+  }
+});
+
+/** POST /api/checadas/horarios/importar — reemplaza la lista de horarios especiales */
+const importarHorarios = catchAsync(async (req, res) => {
+  if (!req.file) throw new AppError("No se recibió ningún archivo", 400);
+  try {
+    const nombre = nombreOriginal(req.file);
+    const r = await horarios.importarArchivo(req.file.path, { usuarioId: req.usuario?.id, nombreArchivo: nombre });
+    await registrarLog({
+      usuarioId: req.usuario?.id,
+      accion: "IMPORT",
+      modulo: "Carga de Checadas",
+      tablaAfectada: "chk_horarios",
+      descripcion:
+        `Horarios especiales de "${nombre}": ${r.personas} personas (reemplazó ${r.reemplazados})` +
+        (r.turnosCreados.length ? `; turnos nuevos ${r.turnosCreados.map((t) => t.clave).join(", ")}` : ""),
+      ipAddress: obtenerIP(req),
+      userAgent: obtenerUserAgent(req),
+    });
+    sendSuccess(res, 200, { ...r, archivo: nombre });
+  } catch (e) {
+    throw e instanceof AppError ? e : new AppError(e.message, e.statusCode || 400);
+  } finally {
+    limpiarTemporal(req.file);
+  }
+});
+
+module.exports = {
+  getFiltros,
+  getReporte,
+  analizarCarga,
+  importarCarga,
+  getHistorialCargas,
+  getHorarios,
+  analizarHorarios,
+  importarHorarios,
+};

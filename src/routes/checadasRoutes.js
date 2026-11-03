@@ -73,4 +73,28 @@ router.post("/carga/importar", authenticate, puedeCrear(MODULO_CARGA), conArchiv
  */
 router.get("/carga/historial", authenticate, puedeLeer(MODULO_CARGA), controller.getHistorialCargas);
 
+// Horarios especiales (administrativos, Compuestos de 12 h): van con la carga,
+// los administra quien sube las checadas.
+
+/**
+ * @route   GET /api/checadas/horarios
+ * @desc    Quién tiene horario especial, agrupado por turnos
+ * @access  Private
+ */
+router.get("/horarios", authenticate, puedeLeer(MODULO_CARGA), controller.getHorarios);
+
+/**
+ * @route   POST /api/checadas/horarios/analizar
+ * @desc    Lo que trae el libro de horarios, sin escribir
+ * @access  Private
+ */
+router.post("/horarios/analizar", authenticate, puedeLeer(MODULO_CARGA), conArchivo("archivo"), controller.analizarHorarios);
+
+/**
+ * @route   POST /api/checadas/horarios/importar
+ * @desc    Reemplaza la lista de horarios especiales
+ * @access  Private
+ */
+router.post("/horarios/importar", authenticate, puedeCrear(MODULO_CARGA), conArchivo("archivo"), controller.importarHorarios);
+
 module.exports = router;
