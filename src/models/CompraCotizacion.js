@@ -1,6 +1,8 @@
 const fs = require("fs");
 const db = require("../config/database");
 const RolModulo = require("./RolModulo");
+const Presupuesto = require("./CompraPresupuesto");
+const tipoCambio = require("../services/tipoCambio.service");
 const { rutaAbsoluta } = require("../services/comprasArchivos.service");
 const { AppError } = require("../utils/errorHandler");
 
@@ -216,17 +218,27 @@ class CompraCotizacion {
     return { ...cab[0], partidas: partidas.rows, opciones: ops, archivos: archivos.rows, masBarata };
   }
 
-  /** Lo que ve el solicitante: la enviada vigente (o la que eligió) y cuántas se descartaron. */
+  /**
+   * Lo que ve el solicitante: la enviada vigente (o la que eligió), cuántas se
+   * descartaron y, mientras puede elegir, cuánto descontaría cada opción del
+   * presupuesto de su área.
+   */
   static async paraSolicitante(solicitudId) {
     const { rows } = await db.query(
-      `SELECT id FROM compras_cotizaciones WHERE solicitud_id = $1 AND estado = 'ENVIADA'`,
+      `SELECT c.id, s.compras_area_id, s.estado
+         FROM compras_solicitudes s
+         LEFT JOIN compras_cotizaciones c ON c.solicitud_id = s.id AND c.estado = 'ENVIADA'
+        WHERE s.id = $1`,
       [solicitudId],
     );
     const { rows: d } = await db.query(
       `SELECT count(*)::int AS n FROM compras_cotizaciones WHERE solicitud_id = $1 AND estado = 'DESCARTADA'`,
       [solicitudId],
     );
-    return { cotizacion: rows[0] ? await this.completa(rows[0].id) : null, descartadas: d[0].n };
+    const cotizacion = rows[0]?.id ? await this.completa(rows[0].id) : null;
+    const impacto =
+      cotizacion && rows[0].estado === "COTIZADA" ? await Presupuesto.impacto(cotizacion, rows[0].compras_area_id) : null;
+    return { cotizacion, descartadas: d[0].n, impacto };
   }
 
   /** La solicitud vista desde Compras, si le toca al usuario. */
@@ -234,7 +246,8 @@ class CompraCotizacion {
     const alcance = await this.alcance(usuario);
     const { rows } = await db.query(
       `SELECT s.id, s.folio, s.asunto, s.detalle, s.estado, s.osticket_numero, s.osticket_estado,
-              s.asignado_nombre, s.asignado_email, s.opcion_elegida_id,
+              s.asignado_nombre, s.asignado_email, s.opcion_elegida_id, s.compras_area_id,
+              s.monto_presupuesto::float AS monto_presupuesto,
               s.monto_elegido::float AS monto_elegido, s.moneda_elegida,
               ${F("s.creado_en")} AS creado_en, ${F("s.enviado_en")} AS enviado_en, ${F("s.elegido_en")} AS elegido_en,
               ca.nombre AS area_nombre, us.nombre_completo AS solicitante_nombre, us.email AS solicitante_email,
@@ -274,6 +287,8 @@ class CompraCotizacion {
       borrador: borrador ? await this.completa(borrador.id) : null,
       enviada: enviada ? await this.completa(enviada.id) : null,
       descartadas: await Promise.all(deEstado("DESCARTADA").map((c) => this.completa(c.id))),
+      // Para que Compras vea cuánto le queda al área al cotizar
+      presupuesto: await Presupuesto.saldoActual(sol.compras_area_id),
       permisos: { cotizar: alcance.cotizar && sol.estado === "EN_COMPRAS" },
     };
   }
@@ -488,7 +503,7 @@ class CompraCotizacion {
   /** Bloquea la solicitud para el solicitante cuando tiene opciones por elegir. */
   static async tomarParaElegir(cliente, solicitudId, usuario) {
     const { rows } = await cliente.query(
-      `SELECT s.id, s.folio, s.estado, s.solicitante_id, c.id AS cotizacion_id
+      `SELECT s.id, s.folio, s.estado, s.solicitante_id, s.compras_area_id, c.id AS cotizacion_id
          FROM compras_solicitudes s
          LEFT JOIN compras_cotizaciones c ON c.solicitud_id = s.id AND c.estado = 'ENVIADA'
         WHERE s.id = $1 FOR UPDATE OF s`,
@@ -512,12 +527,25 @@ class CompraCotizacion {
       const op = c.opciones.find((o) => o.id === Number(opcionId));
       if (!op) throw new AppError("Esa opción no es de esta cotización", 400);
 
+      // Lo que descuenta del presupuesto: sin IVA y en pesos, con el FIX de hoy si es en
+      // dólares. Se guarda tal cual; si luego cambia el tipo de cambio, lo ejercido no se mueve.
+      const [iva, tc, hoy] = await Promise.all([
+        Presupuesto.ivaTasa(cliente),
+        op.moneda === "USD" ? tipoCambio.ultimo() : null,
+        Presupuesto.hoyMexico(cliente),
+      ]);
+      const pres = Presupuesto.montoParaPresupuesto(
+        { total: op.total, moneda: op.moneda, incluyeIva: c.incluye_iva },
+        { tc: tc?.valor, iva },
+      );
+
       await cliente.query(
         `UPDATE compras_solicitudes
             SET estado = 'ELEGIDA', opcion_elegida_id = $2, monto_elegido = $3, moneda_elegida = $4,
-                elegido_en = now(), elegido_por = $5
+                elegido_en = now(), elegido_por = $5,
+                monto_presupuesto = $6, tipo_cambio_presupuesto = $7, presupuesto_anio = $8, presupuesto_mes = $9
           WHERE id = $1`,
-        [solicitudId, op.id, op.total, op.moneda, usuario.id],
+        [solicitudId, op.id, op.total, op.moneda, usuario.id, pres.monto, pres.tipoCambio, hoy.anio, hoy.mes],
       );
       const nota = texto(comentario, 1000);
       await evento(cliente, {
@@ -527,7 +555,19 @@ class CompraCotizacion {
         detalle: `${op.proveedor} · ${dinero(op.total, op.moneda)}${c.incluye_iva ? " con IVA" : " + IVA"}${nota ? ` — ${nota}` : ""}`,
       });
       await cliente.query("COMMIT");
-      return { id: solicitudId, folio: sol.folio, estado: "ELEGIDA", proveedor: op.proveedor, monto: op.total, moneda: op.moneda };
+      const saldo = await Presupuesto.saldo(sol.compras_area_id, hoy.anio, hoy.mes);
+      return {
+        id: solicitudId,
+        folio: sol.folio,
+        estado: "ELEGIDA",
+        proveedor: op.proveedor,
+        monto: op.total,
+        moneda: op.moneda,
+        montoPresupuesto: pres.monto,
+        saldo,
+        // Rebasar no bloquea, pero se le avisa al gerente
+        sobregiro: saldo.configurado && pres.monto != null && saldo.disponibleMes < 0,
+      };
     } catch (e) {
       await cliente.query("ROLLBACK");
       throw e;

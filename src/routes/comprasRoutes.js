@@ -2,6 +2,7 @@ const express = require("express");
 const router = express.Router();
 const controller = require("../controllers/comprasController");
 const cotizaciones = require("../controllers/cotizacionesComprasController");
+const presupuestos = require("../controllers/presupuestosComprasController");
 const { authenticate } = require("../middlewares/auth");
 const { puedeLeer, puedeCrear, puedeEditar } = require("../middlewares/permisos");
 const { recibirArchivos } = require("../services/comprasArchivos.service");
@@ -13,6 +14,8 @@ const MODULO_REPORTES = "/compras/reportes";
 // Leer = ver lo asignado; crear = cotizar; editar = ver todo (jefe de Compras).
 // Lo de "ver todo" lo resuelve el modelo, aquí basta con leer o crear.
 const MODULO_COTIZACIONES = "/compras/cotizaciones";
+// Leer = ver presupuesto, ejercido y disponible; editar = capturar montos
+const MODULO_PRESUPUESTOS = "/compras/presupuestos";
 
 // =============================================
 // SOLICITUDES
@@ -257,5 +260,32 @@ router.post("/solicitudes/:id/elegir", authenticate, puedeLeer(MODULO), cotizaci
  * @desc    Ninguna opción le sirve: regresa a Compras
  */
 router.post("/solicitudes/:id/otras-opciones", authenticate, puedeLeer(MODULO), cotizaciones.postOtrasOpciones);
+
+// =============================================
+// PRESUPUESTOS POR ÁREA
+// =============================================
+
+/**
+ * @route   GET /api/compras/presupuestos?anio=2026
+ * @desc    Presupuesto y ejercido por mes de todas las áreas
+ */
+router.get("/presupuestos", authenticate, puedeLeer(MODULO_PRESUPUESTOS), presupuestos.getPresupuestos);
+
+/**
+ * @route   GET /api/compras/presupuestos/:areaId/elecciones?anio=2026
+ * @desc    Las compras elegidas que se descontaron de un área
+ */
+router.get(
+  "/presupuestos/:areaId/elecciones",
+  authenticate,
+  puedeLeer(MODULO_PRESUPUESTOS),
+  presupuestos.getElecciones,
+);
+
+/**
+ * @route   PUT /api/compras/presupuestos/:anio
+ * @desc    Captura de los 12 meses por área
+ */
+router.put("/presupuestos/:anio", authenticate, puedeEditar(MODULO_PRESUPUESTOS), presupuestos.putPresupuestos);
 
 module.exports = router;

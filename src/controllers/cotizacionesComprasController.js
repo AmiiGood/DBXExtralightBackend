@@ -120,7 +120,14 @@ const postElegir = catchAsync(async (req, res) => {
   const r = await Cotizacion.elegir(idDe(req.params.id), req.usuario, req.body || {});
   await log(req, "UPDATE", `Eligió ${r.proveedor} por ${r.monto} ${r.moneda} en ${r.folio}`, r.id);
   avisos.enSegundoPlano(avisos.avisarElegida, r.id);
-  sendSuccess(res, 200, r, `Elegiste a ${r.proveedor}. Compras ya fue avisado.`);
+  if (r.sobregiro) avisos.enSegundoPlano(avisos.avisarSobregiro, r.id);
+  sendSuccess(
+    res,
+    200,
+    r,
+    `Elegiste a ${r.proveedor}. Compras ya fue avisado.` +
+      (r.sobregiro ? " El presupuesto de tu área quedó en negativo; se le avisó a tu gerente." : ""),
+  );
 });
 
 /** POST /api/compras/solicitudes/:id/otras-opciones   { motivo } */

@@ -30,6 +30,7 @@ const SELECT_SOLICITUD = `
          s.asignado_nombre,
          s.opcion_elegida_id,
          s.monto_elegido::float AS monto_elegido,
+         s.monto_presupuesto::float AS monto_presupuesto,
          s.moneda_elegida,
          ${F("s.elegido_en")}  AS elegido_en,
          s.intentos_envio,
@@ -269,9 +270,16 @@ class CompraSolicitud {
 
     // Las opciones de Compras, una vez enviadas. Se requiere aquí y no arriba
     // para no cargar el modelo de cotizaciones en cada consulta de la bandeja.
-    const { cotizacion, descartadas } = ["COTIZADA", "ELEGIDA"].includes(sol.estado)
+    const { cotizacion, descartadas, impacto } = ["COTIZADA", "ELEGIDA"].includes(sol.estado)
       ? await require("./CompraCotizacion").paraSolicitante(id)
-      : { cotizacion: null, descartadas: 0 };
+      : { cotizacion: null, descartadas: 0, impacto: null };
+
+    // Cuánto le queda al área: el gerente lo ve al aprobar y quien pide al elegir
+    const presupuesto =
+      impacto?.saldo ||
+      (["PENDIENTE", "APROBADA", "EN_COMPRAS"].includes(sol.estado)
+        ? await require("./CompraPresupuesto").saldoActual(sol.compras_area_id)
+        : null);
 
     return {
       ...sol,
@@ -279,6 +287,8 @@ class CompraSolicitud {
       eventos: eventos.rows,
       cotizacion,
       descartadas,
+      impacto,
+      presupuesto,
       permisos: {
         decidir: p.puedeDecidir && sol.estado === "PENDIENTE",
         cancelar: p.esSolicitante && sol.estado === "PENDIENTE",

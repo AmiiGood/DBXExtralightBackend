@@ -462,6 +462,59 @@ async function avisarElegida(id) {
   }
 }
 
+/**
+ * Al gerente y al suplente del área, cuando una elección deja el presupuesto
+ * del mes en negativo. No bloquea nada: es para que lo sepan.
+ */
+async function avisarSobregiro(id) {
+  if (!(await avisosEncendidos())) return;
+  const s = await datosSolicitud(id);
+  if (s.estado !== "ELEGIDA") return;
+  const { rows } = await db.query(
+    `SELECT s.compras_area_id, s.presupuesto_anio, s.presupuesto_mes, s.monto_presupuesto::float AS monto,
+            s.monto_elegido::float AS monto_elegido, s.moneda_elegida, o.proveedor
+       FROM compras_solicitudes s
+       LEFT JOIN compras_cotizacion_opciones o ON o.id = s.opcion_elegida_id
+      WHERE s.id = $1`,
+    [id],
+  );
+  const e = rows[0];
+  if (!e?.presupuesto_anio || e.monto == null) return;
+  const saldo = await require("../models/CompraPresupuesto").saldo(e.compras_area_id, e.presupuesto_anio, e.presupuesto_mes);
+  if (!saldo.configurado || saldo.disponibleMes >= 0) return;
+
+  const pesos = (n) => dinero(n, "MXN").replace(" MXN", "");
+  const { rows: gerentes } = await db.query(
+    `SELECT id, email FROM usuarios WHERE id = ANY($1) AND activo`,
+    [[s.gerente_id, s.suplente_id].filter(Boolean)],
+  );
+  for (const u of gerentes) {
+    await mandar({
+      tipo: "SOBREGIRO",
+      solicitudId: id,
+      usuario: u,
+      asunto: `Presupuesto de ${s.area} rebasado con ${s.folio}`,
+      html: plantilla({
+        titulo: `El presupuesto de ${escapar(s.area)} quedó en negativo`,
+        subtitulo: `${escapar(s.folio)} · ${escapar(s.asunto)}`,
+        cuerpo: `
+          <p><b>${escapar(s.solicitante)}</b> eligió a <b>${escapar(e.proveedor || "un proveedor")}</b>
+             por ${dinero(e.monto_elegido, e.moneda_elegida)}; al presupuesto se le descontaron
+             <b>${pesos(e.monto)}</b> (sin IVA, en pesos).</p>
+          <table style="border-collapse:collapse;font-size:14px;margin:8px 0">
+            <tr><td style="padding:4px 12px 4px 0;color:#6b7280">Disponible del mes</td>
+                <td style="padding:4px 0;color:#b91c1c"><b>${pesos(saldo.disponibleMes)}</b></td></tr>
+            <tr><td style="padding:4px 12px 4px 0;color:#6b7280">Disponible del año</td>
+                <td style="padding:4px 0">${pesos(saldo.disponibleAnual)} de ${pesos(saldo.presupuestoAnual)}</td></tr>
+          </table>
+          <p style="font-size:14px;color:#6b7280">La compra no se detuvo: el DBX solo avisa cuando se rebasa.</p>`,
+        boton: { texto: "Ver la solicitud", url: enlace({ id }) },
+      }),
+      texto: `${s.folio} dejó el presupuesto de ${s.area} en ${pesos(saldo.disponibleMes)} este mes.`,
+    });
+  }
+}
+
 /** A Compras: ninguna opción le sirvió al solicitante. */
 async function avisarOtrasOpciones(id) {
   if (!(await avisosEncendidos())) return;
@@ -657,6 +710,7 @@ module.exports = {
   avisarCotizada,
   avisarElegida,
   avisarOtrasOpciones,
+  avisarSobregiro,
   mandarRecordatorios,
   mandarPrueba,
   ultimosCorreos,
