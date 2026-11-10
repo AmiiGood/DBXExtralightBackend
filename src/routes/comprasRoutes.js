@@ -4,7 +4,8 @@ const controller = require("../controllers/comprasController");
 const cotizaciones = require("../controllers/cotizacionesComprasController");
 const presupuestos = require("../controllers/presupuestosComprasController");
 const { authenticate } = require("../middlewares/auth");
-const { puedeLeer, puedeCrear, puedeEditar } = require("../middlewares/permisos");
+const formatos = require("../controllers/formatosComprasController");
+const { puedeLeer, puedeCrear, puedeEditar, puedeEliminar } = require("../middlewares/permisos");
 const { recibirArchivos } = require("../services/comprasArchivos.service");
 
 const MODULO = "/compras/solicitudes";
@@ -16,6 +17,8 @@ const MODULO_REPORTES = "/compras/reportes";
 const MODULO_COTIZACIONES = "/compras/cotizaciones";
 // Leer = ver presupuesto, ejercido y disponible; editar = capturar montos
 const MODULO_PRESUPUESTOS = "/compras/presupuestos";
+// Leer = ver el reporte; crear = capturar; editar = corregir los de otros; eliminar = borrar
+const MODULO_FORMATOS = "/compras/formatos";
 
 // =============================================
 // SOLICITUDES
@@ -287,5 +290,39 @@ router.get(
  * @desc    Captura de los 12 meses por área
  */
 router.put("/presupuestos/:anio", authenticate, puedeEditar(MODULO_PRESUPUESTOS), presupuestos.putPresupuestos);
+
+// =============================================
+// FORMATOS EN PAPEL
+//
+// Captura del formato de autorización y registro mientras el flujo con firmas
+// no está en el sistema. Corregir pide crear: el controlador deja a quien
+// capturó corregir los suyos y, con editar, los de todos.
+// =============================================
+
+/**
+ * @route   GET /api/compras/formatos?desde&hasta&areaId&moneda&estado&q
+ */
+router.get("/formatos", authenticate, puedeLeer(MODULO_FORMATOS), formatos.getFormatos);
+
+/**
+ * @route   GET /api/compras/formatos/opciones
+ * @desc    Áreas y lo ya capturado en cada campo, para sugerirlo
+ */
+router.get("/formatos/opciones", authenticate, puedeLeer(MODULO_FORMATOS), formatos.getOpciones);
+
+/**
+ * @route   POST /api/compras/formatos
+ */
+router.post("/formatos", authenticate, puedeCrear(MODULO_FORMATOS), formatos.postFormato);
+
+/**
+ * @route   PUT /api/compras/formatos/:id
+ */
+router.put("/formatos/:id", authenticate, puedeCrear(MODULO_FORMATOS), formatos.putFormato);
+
+/**
+ * @route   DELETE /api/compras/formatos/:id
+ */
+router.delete("/formatos/:id", authenticate, puedeEliminar(MODULO_FORMATOS), formatos.deleteFormato);
 
 module.exports = router;
