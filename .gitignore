@@ -34,3 +34,7 @@ dist/
 build/
 # Adjuntos de las solicitudes de Compra (COMPRAS_ARCHIVOS_DIR)
 storage/
+
+# Arranque automático en Windows (lo genera deploy/windows/instalar.ps1 en cada equipo)
+deploy/windows/node-dir.txt
+deploy/windows/instalacion.json
