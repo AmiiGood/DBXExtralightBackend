@@ -11,4 +11,18 @@ const { authenticate } = require("../middlewares/auth");
  */
 router.get("/", authenticate, controller.getInicio);
 
+/**
+ * @route   GET /api/inicio/adornos
+ * @desc    ¿Se muestran los adornos de temporada? Sin sesión: la pantalla de
+ *          inicio de sesión también los enseña.
+ */
+router.get("/adornos", controller.getAdornos);
+
+/**
+ * @route   PUT /api/inicio/adornos  { activos }
+ * @desc    Encender o apagar los adornos para todos (solo administradores;
+ *          lo revisa el controlador)
+ */
+router.put("/adornos", authenticate, controller.putAdornos);
+
 module.exports = router;

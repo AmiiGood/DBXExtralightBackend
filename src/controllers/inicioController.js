@@ -5,7 +5,7 @@ const CompraCotizacion = require("../models/CompraCotizacion");
 const osticket = require("../config/osticket");
 const graph = require("../utils/graphClient");
 const { esCarpeta } = require("../services/sincronizarSharePoint.service");
-const { catchAsync, sendSuccess } = require("../utils/errorHandler");
+const { catchAsync, sendSuccess, AppError } = require("../utils/errorHandler");
 
 /**
  * La pantalla de Inicio de cada usuario.
@@ -158,4 +158,39 @@ const getInicio = catchAsync(async (req, res) => {
   sendSuccess(res, 200, { pendientes: lista, sincronizaciones: sinc });
 });
 
-module.exports = { getInicio };
+// =============================================
+// ADORNOS DE TEMPORADA
+//
+// Las fechas viven en el frontend; aquí solo el interruptor general. Si la
+// migración de sistema_config no está aplicada, se muestran (es lo normal).
+// =============================================
+
+async function adornosActivos() {
+  try {
+    const { rows } = await db.query("SELECT valor FROM sistema_config WHERE clave = 'adornos_temporada'");
+    return rows[0] ? rows[0].valor === true : true;
+  } catch {
+    return true;
+  }
+}
+
+/** GET /api/inicio/adornos — público: lo lee también la pantalla de inicio de sesión */
+const getAdornos = catchAsync(async (req, res) => {
+  sendSuccess(res, 200, { activos: await adornosActivos() });
+});
+
+/** PUT /api/inicio/adornos  { activos } — solo administradores */
+const putAdornos = catchAsync(async (req, res) => {
+  if (!req.usuario.rol?.esAdmin) throw new AppError("Solo un administrador puede cambiar esto", 403);
+  const activos = Boolean(req.body?.activos);
+  await db.query(
+    `INSERT INTO sistema_config (clave, valor, actualizado_por, actualizado_en)
+     VALUES ('adornos_temporada', $1::jsonb, $2, now())
+     ON CONFLICT (clave) DO UPDATE SET valor = EXCLUDED.valor,
+       actualizado_por = EXCLUDED.actualizado_por, actualizado_en = now()`,
+    [JSON.stringify(activos), req.usuario.id],
+  );
+  sendSuccess(res, 200, { activos }, activos ? "Adornos de temporada encendidos" : "Adornos de temporada apagados");
+});
+
+module.exports = { getInicio, getAdornos, putAdornos };
