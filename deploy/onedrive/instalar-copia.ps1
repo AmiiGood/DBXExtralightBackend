@@ -35,6 +35,12 @@ if ($Quitar) {
 
 if (-not $Archivos -or -not $Destino) { throw 'Faltan -Archivos y -Destino (ver el inicio de este script).' }
 
+# Con "powershell -File", varias rutas separadas por coma llegan como UN solo
+# texto. Se separan solo donde la coma va seguida de otra ruta (C:\ o \\), así
+# no se rompe un nombre de archivo que traiga coma.
+$Archivos = @($Archivos | ForEach-Object { $_ -split '\s*[,;]\s*(?=[A-Za-z]:\\|\\\\)' } |
+  ForEach-Object { $_.Trim().Trim('"') } | Where-Object { $_ })
+
 # 1. Los archivos de origen tienen que existir (y estar sincronizados)
 foreach ($a in $Archivos) {
   if (-not (Test-Path -LiteralPath $a)) { throw "No existe: $a. ¿Está sincronizada esa carpeta de SharePoint?" }
