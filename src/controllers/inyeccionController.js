@@ -172,7 +172,9 @@ const getHistorialCargas = catchAsync(async (req, res) => {
   const db = require("../config/database");
   const { rows } = await db.query(
     `SELECT c.id, c.nombre_archivo, c.total_registros, c.registros_nuevos,
-            c.registros_omitidos, c.creado_en, u.nombre_completo AS usuario,
+            c.registros_omitidos, c.creado_en,
+            -- Sin usuario = la cargó Archivos de SharePoint solo
+            COALESCE(u.nombre_completo, 'Carga automática') AS usuario,
             (SELECT min(fecha) FROM iny_produccion p WHERE p.carga_id = c.id) AS desde,
             (SELECT max(fecha) FROM iny_produccion p WHERE p.carga_id = c.id) AS hasta
        FROM iny_cargas c

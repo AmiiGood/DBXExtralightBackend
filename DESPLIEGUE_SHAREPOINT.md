@@ -9,6 +9,75 @@ carga manual. La configuración (URL de la carpeta y nombre del archivo) está e
 El backend entra como **aplicación**, no como una persona. No usa la contraseña
 de nadie y no necesita que haya una sesión abierta en el servidor.
 
+> **Estado al 2026-11-11: Graph no está disponible.** TI de Finproject no dio
+> el consentimiento de administrador, y el tenant tampoco deja que un usuario
+> autorice la app (se probó con la cuenta de Alexis: pide "aprobación del
+> administrador"). Lo que funciona hoy es la **sección 0**: leer desde una
+> carpeta sincronizada con OneDrive. Las secciones 1 a 3 quedan por si algún
+> día TI lo autoriza.
+
+---
+
+## 0. Leer desde una carpeta sincronizada con OneDrive (lo que funciona hoy)
+
+En lugar de entrar a SharePoint, el backend lee la carpeta que OneDrive
+mantiene sincronizada en un equipo. Todo lo demás es igual: mismos
+importadores, la misma espera mientras alguien edita y no se reintenta un
+archivo que ya falló hasta que cambie.
+
+### 0.1 Sincronizar (con la cuenta de una persona)
+
+En un equipo que se quede encendido y con la sesión iniciada:
+
+1. Abrir en el navegador la carpeta de SharePoint donde está el libro y dar
+   **Sincronizar**. OneDrive pide entrar con la cuenta @foamcreations.mx.
+2. En el Explorador de archivos, clic derecho en la carpeta →
+   **Mantener siempre en este dispositivo**. Si no, OneDrive deja los archivos
+   "solo en la nube", y otra cuenta (la del backend) no puede leer su contenido.
+3. Copiar la ruta, por ejemplo
+   `C:\Users\aramos\Finproject S.p.A\KPI's - Production`.
+
+OneDrive solo sincroniza **mientras esa sesión está iniciada**. En el servidor
+se puede entrar por escritorio remoto y **cerrar la ventana sin cerrar sesión**.
+Si el equipo se reinicia, hay que volver a entrar una vez.
+
+### 0.2 Que el backend la pueda leer
+
+El backend corre con la cuenta de `instalar.ps1 -Usuario` (ver
+DESPLIEGUE_ARRANQUE.md), no con la de la persona que sincroniza.
+
+- **En el mismo servidor:** en la carpeta sincronizada → Propiedades →
+  Seguridad, darle **Lectura** a la cuenta del backend.
+- **En otro equipo:** compartir la carpeta por red, con lectura para la cuenta
+  del backend, y usar la ruta `\\equipo\carpeta`.
+
+### 0.3 Configurarlo en el DBX
+
+En **Archivos de SharePoint**, en cada archivo:
+
+1. En "Carpeta sincronizada con OneDrive o URL de SharePoint", pegar la ruta de
+   la carpeta (`C:\...` o `\\equipo\...`).
+2. Revisar el nombre del archivo y guardar.
+3. **Probar**: dice si la carpeta existe, si está el archivo (si no, lista los
+   Excel que sí hay) y si se puede leer el contenido. Si OneDrive lo tiene solo
+   en la nube, lo avisa.
+4. Marcar **Leer este archivo solo**.
+
+La huella de cada archivo es su tamaño más su fecha de modificación (OneDrive
+conserva la de SharePoint). Mientras no cambie, el libro no se vuelve a leer.
+
+**Requiere la migración `2026-11-11_iny_carga_automatica.sql`**: sin ella la
+carga automática de Inyección falla, porque "quién cargó" era obligatorio. Se
+encontró en la primera prueba real, el 2026-11-11.
+
+```powershell
+node scripts/aplicar-migracion.js 2026-11-11_iny_carga_automatica.sql
+```
+
+Si el equipo que sincroniza se apaga o se cierra su sesión, los archivos dejan
+de actualizarse. Se nota en **Inicio → Sincronizaciones** ("último cambio
+leído" se queda viejo). Mientras tanto siguen las cargas manuales.
+
 ---
 
 ## 1. Lo que tiene que hacer TI de Finproject (administrador de Entra ID)

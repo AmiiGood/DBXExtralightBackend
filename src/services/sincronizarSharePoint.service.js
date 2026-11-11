@@ -1,3 +1,5 @@
+const fs = require("fs");
+const path = require("path");
 const cron = require("node-cron");
 const db = require("../config/database");
 const graph = require("../utils/graphClient");
@@ -35,7 +37,22 @@ const inyeccion = require("./importarInyeccion.service");
  * Si el importador rechaza el libro (hoja renombrada, columnas movidas), volver
  * a bajarlo cada vuelta solo repite el mismo error. Se guarda la huella con la
  * que falló y se espera a que alguien lo corrija y lo guarde.
+ *
+ * ---------------------------------------------------------------------------
+ * O DESDE UNA CARPETA SINCRONIZADA CON ONEDRIVE
+ * ---------------------------------------------------------------------------
+ * Finproject no dio el consentimiento de administrador para Graph, ni deja que
+ * un usuario autorice la app (probado el 2026-11-11). La salida: sincronizar
+ * la biblioteca con OneDrive en un equipo con sesión iniciada y poner como
+ * "ubicación" esa carpeta (C:\Users\…\Finproject S.p.A\… o \\equipo\carpeta).
+ * Todo lo demás es igual: mismos importadores, misma espera de reposo y misma
+ * regla de no reintentar lo que ya falló. La huella es tamaño + fecha de
+ * modificación (OneDrive deja la de SharePoint), así no se lee el libro
+ * completo en cada vuelta.
  */
+
+/** ¿La ubicación es una carpeta del disco o de red en vez de una URL? */
+const esCarpeta = (ubicacion) => /^[a-z]:[\\/]|^\\\\/i.test(String(ubicacion || "").trim());
 
 /** Cada cuánto se revisa SharePoint. */
 const CADA_MINUTOS = Number(process.env.SP_SYNC_MINUTOS || 20);
@@ -203,8 +220,9 @@ const rutaLegible = (r, archivo) =>
  */
 async function localizar(config) {
   if (!config.ubicacion) {
-    throw new Error("Falta la ubicación: pegar la URL de la carpeta de SharePoint.");
+    throw new Error("Falta la ubicación: pegar la URL de la carpeta de SharePoint o la carpeta sincronizada.");
   }
+  if (esCarpeta(config.ubicacion)) return localizarEnCarpeta(config);
   const resuelta = await resolverCarpeta(config.ubicacion);
   const rel = resuelta.carpeta ? `${resuelta.carpeta}/${config.archivo}` : config.archivo;
   const ruta = rutaLegible(resuelta, config.archivo);
@@ -235,8 +253,66 @@ async function localizar(config) {
   return { resuelta, item, ruta };
 }
 
+/**
+ * Lo mismo que `localizar`, pero en una carpeta del disco o de red. Devuelve un
+ * `item` con la forma de Graph (size, lastModifiedDateTime) para que el resto
+ * del flujo no tenga que distinguir.
+ */
+async function localizarEnCarpeta(config) {
+  const carpeta = config.ubicacion.trim();
+  const ruta = path.join(carpeta, config.archivo);
+  let st;
+  try {
+    st = await fs.promises.stat(ruta);
+  } catch (e) {
+    if (e.code === "ENOENT") {
+      let carpetaExiste = true;
+      try {
+        await fs.promises.access(carpeta);
+      } catch {
+        carpetaExiste = false;
+      }
+      const err = new Error(
+        carpetaExiste
+          ? `No se encontró "${config.archivo}" en ${carpeta}. Revisar el nombre; si lleva el año, cambia cada enero.`
+          : `No existe la carpeta ${carpeta} o el servidor no la alcanza.`,
+      );
+      err.noEncontrado = carpetaExiste;
+      err.carpetaLocal = carpeta;
+      throw err;
+    }
+    throw e;
+  }
+  if (!st.isFile()) throw new Error(`${ruta} es una carpeta, no un archivo.`);
+  return {
+    ruta,
+    item: {
+      local: true,
+      rutaLocal: ruta,
+      size: st.size,
+      mtimeMs: Math.round(st.mtimeMs),
+      lastModifiedDateTime: st.mtime.toISOString(),
+    },
+  };
+}
+
 /** Traduce lo que falla de red o de credenciales a algo accionable. */
 function explicarError(e) {
+  // Errores del disco o de la carpeta de red (modo carpeta sincronizada)
+  if (["EACCES", "EPERM"].includes(e.code)) {
+    return (
+      `Sin permiso para leer ${e.path || "el archivo"}. La cuenta con la que corre el ` +
+      `backend necesita permiso de lectura en esa carpeta.`
+    );
+  }
+  if (e.code === "EBUSY") return `${e.path || "El archivo"} está ocupado; se reintenta en la siguiente vuelta.`;
+  if (e.code && /cloud|nube/i.test(e.message || "") || ["EIO", "UNKNOWN"].includes(e.code)) {
+    return (
+      `No se pudo leer el contenido de ${e.path || "el archivo"}: OneDrive lo tiene solo en ` +
+      `la nube. En el equipo donde se sincroniza, clic derecho en la carpeta > ` +
+      `"Mantener siempre en este dispositivo".`
+    );
+  }
   if (e instanceof graph.GraphError) {
     if (e.status === 401) {
       return "SharePoint rechazó el acceso de la aplicación. Revisar SP_CLIENT_ID y SP_CLIENT_SECRET (el secreto vence).";
@@ -260,7 +336,9 @@ function explicarError(e) {
 
 /** La huella del contenido. quickXorHash es lo que publica SharePoint Online. */
 const huellaDe = (item) =>
-  item.file?.hashes?.quickXorHash || item.file?.hashes?.sha256Hash || item.cTag || null;
+  item.local
+    ? `carpeta:${item.size}:${item.mtimeMs}`
+    : item.file?.hashes?.quickXorHash || item.file?.hashes?.sha256Hash || item.cTag || null;
 
 /** Texto corto para la pantalla, a partir de lo que devuelve el importador. */
 function resumir(r) {
@@ -308,6 +386,16 @@ async function probar(clave) {
   const config = await configDe(clave);
   try {
     const { item, ruta } = await localizar(config);
+    // En una carpeta sincronizada, que el archivo exista no basta: hay que poder
+    // leerlo (OneDrive puede tenerlo solo en la nube). Se leen unos bytes.
+    if (item.local) {
+      const fd = await fs.promises.open(item.rutaLocal, "r");
+      try {
+        await fd.read(Buffer.alloc(16), 0, 16, 0);
+      } finally {
+        await fd.close();
+      }
+    }
     const modificado = new Date(item.lastModifiedDateTime);
     const quien = item.lastModifiedBy?.user?.displayName;
     return {
@@ -322,7 +410,14 @@ async function probar(clave) {
     };
   } catch (e) {
     let mensaje = explicarError(e);
-    if (e.noEncontrado) {
+    if (e.noEncontrado && e.carpetaLocal) {
+      try {
+        const libros = (await fs.promises.readdir(e.carpetaLocal)).filter((n) => /\.xls[xmb]?$/i.test(n));
+        mensaje += libros.length ? ` En esa carpeta hay: ${libros.join(", ")}.` : " En esa carpeta no hay ningún Excel.";
+      } catch {
+        // Si ni la carpeta se puede listar, el mensaje original basta
+      }
+    } else if (e.noEncontrado) {
       try {
         const { driveId, carpeta } = e.resuelta;
         const hijos = await todas(
@@ -362,6 +457,13 @@ async function sincronizarArchivo(clave, opciones = {}) {
   }
   if (!config.activo && !opciones.forzar) {
     return { clave, omitido: true, motivo: "El archivo está marcado como inactivo" };
+  }
+  // Sin nada que leer no se anota una corrida fallida cada 20 minutos
+  if (!config.ubicacion) {
+    return { clave, omitido: true, motivo: "Sin ubicación configurada" };
+  }
+  if (!esCarpeta(config.ubicacion) && !graph.configurado()) {
+    return { clave, omitido: true, motivo: "La ubicación es de SharePoint y el servidor no tiene credenciales de Graph" };
   }
 
   const arranque = Date.now();
@@ -440,7 +542,9 @@ async function sincronizarArchivo(clave, opciones = {}) {
   // 2. Bajarlo
   let contenido;
   try {
-    contenido = await graph.descargar(item.parentReference.driveId, item.id);
+    contenido = item.local
+      ? await fs.promises.readFile(item.rutaLocal)
+      : await graph.descargar(item.parentReference.driveId, item.id);
   } catch (e) {
     return anotarError(explicarError(e));
   }
@@ -449,7 +553,7 @@ async function sincronizarArchivo(clave, opciones = {}) {
   let r;
   try {
     r = await importador.importar(contenido, {
-      nombreArchivo: `${config.archivo} (SharePoint)`,
+      nombreArchivo: `${config.archivo} (${item.local ? "OneDrive" : "SharePoint"})`,
       usuarioId: opciones.usuarioId || null,
     });
   } catch (e) {
@@ -525,14 +629,17 @@ async function estado() {
     corridas: corridas.rows,
     cadaMinutos: CADA_MINUTOS,
     reposoMinutos: REPOSO_MINUTOS,
-    configurado: graph.configurado(),
+    // Se puede trabajar con Graph o con al menos una carpeta sincronizada
+    configurado: graph.configurado() || archivos.some((a) => esCarpeta(a.ubicacion)),
+    graph: graph.configurado(),
     enCurso: corriendo,
   };
 }
 
 /** Cambia la ubicación, el nombre o si se vigila. */
 async function guardarConfiguracion(clave, { ubicacion, archivo, activo }) {
-  if (ubicacion) interpretarUbicacion(ubicacion); // que falle aquí y no a las 3 a.m.
+  // Que falle aquí y no a las 3 a.m. (una carpeta se valida al probarla)
+  if (ubicacion && !esCarpeta(ubicacion)) interpretarUbicacion(ubicacion);
 
   const campos = [];
   const params = [clave];
@@ -569,9 +676,11 @@ let tarea = null;
 function iniciarProgramado() {
   if (tarea) return;
 
+  // Se programa aunque no haya credenciales de Graph: los archivos pueden venir
+  // de una carpeta sincronizada. Los que no tienen de dónde leer se omiten sin
+  // anotar nada (ver sincronizarArchivo).
   if (!graph.configurado()) {
-    console.log("☁️  SharePoint: sin credenciales en el .env, no se programa la revisión");
-    return;
+    console.log("☁️  SharePoint: sin credenciales de Graph; solo se leerán carpetas sincronizadas");
   }
 
   tarea = cron.schedule(`*/${CADA_MINUTOS} * * * *`, async () => {
@@ -611,5 +720,6 @@ module.exports = {
   iniciarProgramado,
   detenerProgramado,
   interpretarUbicacion,
+  esCarpeta,
   IMPORTADORES,
 };

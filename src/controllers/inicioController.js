@@ -4,6 +4,7 @@ const CompraSolicitud = require("../models/CompraSolicitud");
 const CompraCotizacion = require("../models/CompraCotizacion");
 const osticket = require("../config/osticket");
 const graph = require("../utils/graphClient");
+const { esCarpeta } = require("../services/sincronizarSharePoint.service");
 const { catchAsync, sendSuccess } = require("../utils/errorHandler");
 
 /**
@@ -91,21 +92,23 @@ async function sincronizaciones() {
   // Archivos vigilados (carpetas de red y SharePoint): uno por renglón
   const archivos = [
     ["Customer Service", "cs_archivos", "/customer-service/archivos", null],
-    ["SharePoint", "sp_archivos", "/admin/sharepoint", () => graph.configurado()],
+    // SharePoint lee por Graph o de una carpeta sincronizada con OneDrive; un
+    // renglón sin ninguna de las dos no tiene de dónde leer
+    ["SharePoint", "sp_archivos", "/admin/sharepoint", (f) => !f.ubicacion || (!esCarpeta(f.ubicacion) && !graph.configurado())],
     ["CAPEX", "capex_archivo", "/capex/archivo", null],
     ["AIMS", "aims_archivo", "/aims/archivo", null],
   ];
-  for (const [grupo, tabla, ruta, configurado] of archivos) {
+  for (const [grupo, tabla, ruta, sinConfigurar] of archivos) {
     const filas = await seguro(async () => {
       const { rows } = await db.query(
-        `SELECT nombre, activo, ultimo_error,
+        `SELECT nombre, activo, ultimo_error, ${tabla === "sp_archivos" ? "ubicacion" : "NULL AS ubicacion"},
                 floor(extract(epoch FROM now() - leido_en) / 60)::int AS minutos
            FROM ${tabla} ORDER BY nombre`,
       );
       return rows;
     }, []);
-    // Sin credenciales, un solo renglón para todo el grupo: el problema es el mismo
-    if (filas.length && configurado && !configurado()) {
+    // Si a ninguno le falta lo mismo, un solo renglón para todo el grupo
+    if (filas.length && sinConfigurar && filas.every(sinConfigurar)) {
       lista.push({ nombre: grupo, ruta, estado: "sin-configurar", minutos: null, detalle: null });
       continue;
     }
@@ -113,7 +116,8 @@ async function sincronizaciones() {
       lista.push({
         nombre: filas.length > 1 || f.nombre !== grupo ? `${grupo} · ${f.nombre}` : grupo,
         ruta,
-        estado: !f.activo ? "apagado" : f.ultimo_error ? "error" : f.minutos == null ? "sin-datos" : "ok",
+        estado: sinConfigurar && sinConfigurar(f) ? "sin-configurar"
+          : !f.activo ? "apagado" : f.ultimo_error ? "error" : f.minutos == null ? "sin-datos" : "ok",
         minutos: f.minutos,
         // Se lee solo cuando el archivo cambia: que sea viejo no es un error
         que: "último cambio leído",
