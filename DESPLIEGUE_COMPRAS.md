@@ -39,8 +39,8 @@ En el servidor de producción, desde la carpeta del backend, con el `.env` que
 apunta a `dbx_ensayo`. Primero simuladas (validan y se revierten), luego de verdad:
 
 ```bash
-node scripts/aplicar-migracion.js 2026-10-02_compras_solicitudes_01_schema.sql 2026-10-02_compras_solicitudes_02_envio_osticket.sql 2026-10-02_compras_solicitudes_03_avisos.sql 2026-11-02_compras_solicitudes_04_cotizaciones.sql 2026-11-03_compras_solicitudes_05_nombre_tema_41.sql 2026-11-09_compras_solicitudes_06_presupuestos.sql 2026-11-10_compras_solicitudes_07_formatos.sql --simular
-node scripts/aplicar-migracion.js 2026-10-02_compras_solicitudes_01_schema.sql 2026-10-02_compras_solicitudes_02_envio_osticket.sql 2026-10-02_compras_solicitudes_03_avisos.sql 2026-11-02_compras_solicitudes_04_cotizaciones.sql 2026-11-03_compras_solicitudes_05_nombre_tema_41.sql 2026-11-09_compras_solicitudes_06_presupuestos.sql 2026-11-10_compras_solicitudes_07_formatos.sql
+node scripts/aplicar-migracion.js 2026-10-02_compras_solicitudes_01_schema.sql 2026-10-02_compras_solicitudes_02_envio_osticket.sql 2026-10-02_compras_solicitudes_03_avisos.sql 2026-11-02_compras_solicitudes_04_cotizaciones.sql 2026-11-03_compras_solicitudes_05_nombre_tema_41.sql 2026-11-09_compras_solicitudes_06_presupuestos.sql 2026-11-10_compras_solicitudes_07_formatos.sql 2026-11-11_compras_solicitudes_08_tablero.sql --simular
+node scripts/aplicar-migracion.js 2026-10-02_compras_solicitudes_01_schema.sql 2026-10-02_compras_solicitudes_02_envio_osticket.sql 2026-10-02_compras_solicitudes_03_avisos.sql 2026-11-02_compras_solicitudes_04_cotizaciones.sql 2026-11-03_compras_solicitudes_05_nombre_tema_41.sql 2026-11-09_compras_solicitudes_06_presupuestos.sql 2026-11-10_compras_solicitudes_07_formatos.sql 2026-11-11_compras_solicitudes_08_tablero.sql
 ```
 
 | Migración | Qué hace |
@@ -52,6 +52,7 @@ node scripts/aplicar-migracion.js 2026-10-02_compras_solicitudes_01_schema.sql 2
 | `05_nombre_tema_41` | Corrige el nombre del tema 41: es **Inyección Suela y Almohada** (la 04 lo había dado de alta como "…y Almacén"). |
 | `06_presupuestos` | Presupuesto por área de Compras: un monto por mes (el anual es la suma), lo que se descuenta al elegir (sin IVA y en pesos, con el FIX del día si es en dólares), aviso SOBREGIRO al gerente y módulo "Presupuestos de Compras". Lo que no se gasta pasa al mes siguiente; rebasar no bloquea. |
 | `07_formatos` | Captura del "Formato de autorización y registro de compras" en papel mientras el flujo con firmas no está en el sistema: tabla `compras_formatos` (un formato por ticket; quien firmó, tipo, cuenta y CC como texto) y módulo "Formatos de Compras". No toca nada de lo anterior. |
+| `08_tablero` | Módulo "Tablero de Compras" (solo consulta, para Dirección): gasto autorizado contra presupuesto por área, mes y tipo, en pesos o dólares. No crea tablas. |
 
 Las seis son idempotentes: si una falla a la mitad se puede volver a correr.
 
@@ -116,6 +117,7 @@ Si sale `sin OSTICKET_COMPRAS_API_URL/KEY`, falta el paso 4 o el 6.
     **editar** = capturar los montos (Finanzas o quien lleve el presupuesto).
   - "Formatos de Compras": **leer** = ver el reporte y exportarlo; **crear** = capturar
     (quien captura corrige los suyos); **editar** = corregir los de todos; **eliminar** = borrar.
+  - "Tablero de Compras": **leer**, a Dirección (Celina y Stefano) y a quien deba ver el gasto. Es solo consulta: no da acceso a la captura ni a las cotizaciones.
   - "Cotizaciones de Compras", para los **agentes de Compras**:
     - **leer** = ve los tickets que tiene asignados en osTicket;
     - **crear** = puede capturar y mandar opciones de proveedores;
@@ -170,7 +172,7 @@ Apagar los módulos sin borrar nada:
 
 ```sql
 UPDATE modulos SET activo = false
- WHERE ruta IN ('/compras/solicitudes', '/compras/aprobadores', '/compras/reportes', '/compras/cotizaciones', '/compras/presupuestos', '/compras/formatos');
+ WHERE ruta IN ('/compras/solicitudes', '/compras/aprobadores', '/compras/reportes', '/compras/cotizaciones', '/compras/presupuestos', '/compras/formatos', '/compras/tablero');
 ```
 
 Y quitar `OSTICKET_COMPRAS_API_KEY` del `.env` para que no se manden más

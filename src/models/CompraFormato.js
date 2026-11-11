@@ -59,10 +59,11 @@ const SELECT = `
     JOIN compras_areas ca ON ca.id = f.compras_area_id
     LEFT JOIN usuarios cu ON cu.id = f.capturado_por
     LEFT JOIN usuarios au ON au.id = f.actualizado_por
+    -- FIX del día o el último antes; si no hay, el más cercano después
     LEFT JOIN LATERAL (
       SELECT valor FROM tipos_cambio
-       WHERE serie = '${SERIE_FIX}' AND fecha <= f.fecha AND f.moneda = 'USD'
-       ORDER BY fecha DESC LIMIT 1
+       WHERE serie = '${SERIE_FIX}' AND f.moneda = 'USD'
+       ORDER BY (fecha > f.fecha), abs(fecha - f.fecha) LIMIT 1
     ) tc ON true`;
 
 /** Qué firmas le faltan a un formato. */

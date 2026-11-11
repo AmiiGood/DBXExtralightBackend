@@ -5,6 +5,7 @@ const cotizaciones = require("../controllers/cotizacionesComprasController");
 const presupuestos = require("../controllers/presupuestosComprasController");
 const { authenticate } = require("../middlewares/auth");
 const formatos = require("../controllers/formatosComprasController");
+const tablero = require("../controllers/tableroComprasController");
 const { puedeLeer, puedeCrear, puedeEditar, puedeEliminar } = require("../middlewares/permisos");
 const { recibirArchivos } = require("../services/comprasArchivos.service");
 
@@ -19,6 +20,8 @@ const MODULO_COTIZACIONES = "/compras/cotizaciones";
 const MODULO_PRESUPUESTOS = "/compras/presupuestos";
 // Leer = ver el reporte; crear = capturar; editar = corregir los de otros; eliminar = borrar
 const MODULO_FORMATOS = "/compras/formatos";
+// Solo consulta, para Dirección: no da acceso a la captura ni a las cotizaciones
+const MODULO_TABLERO = "/compras/tablero";
 
 // =============================================
 // SOLICITUDES
@@ -324,5 +327,15 @@ router.put("/formatos/:id", authenticate, puedeCrear(MODULO_FORMATOS), formatos.
  * @route   DELETE /api/compras/formatos/:id
  */
 router.delete("/formatos/:id", authenticate, puedeEliminar(MODULO_FORMATOS), formatos.deleteFormato);
+
+// =============================================
+// TABLERO PARA DIRECCIÓN
+// =============================================
+
+/**
+ * @route   GET /api/compras/tablero?desde&hasta
+ * @desc    Gasto autorizado (formatos) y presupuesto del periodo
+ */
+router.get("/tablero", authenticate, puedeLeer(MODULO_TABLERO), tablero.getTablero);
 
 module.exports = router;
