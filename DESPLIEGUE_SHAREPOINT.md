@@ -25,9 +25,17 @@ mantiene sincronizada en un equipo. Todo lo demás es igual: mismos
 importadores, la misma espera mientras alguien edita y no se reintenta un
 archivo que ya falló hasta que cambie.
 
+**Cómo quedó en FCMX (2026-11-11):** el servidor es Windows Server y ahí no
+se puede usar OneDrive con una cuenta personal. Por eso OneDrive corre en la
+laptop de Alexis y una tarea **copia** los Excel a
+`\\172.16.101.124\AREAS\...`, que el DBX ya lee (como Customer Service). Así no
+hay que compartir nada desde la laptop: la conexión sale de la laptop hacia la
+red, no al revés. Son los pasos 0.1 y 0.4. Los pasos 0.2 y 0.3 sirven si algún
+día se sincroniza en el mismo equipo del DBX.
+
 ### 0.1 Sincronizar (con la cuenta de una persona)
 
-En un equipo que se quede encendido y con la sesión iniciada:
+En la laptop o PC de esa persona:
 
 1. Abrir en el navegador la carpeta de SharePoint donde está el libro y dar
    **Sincronizar**. OneDrive pide entrar con la cuenta @foamcreations.mx.
@@ -73,6 +81,35 @@ encontró en la primera prueba real, el 2026-11-11.
 ```powershell
 node scripts/aplicar-migracion.js 2026-11-11_iny_carga_automatica.sql
 ```
+
+### 0.4 Copiar desde la laptop a la red (lo que se usa en FCMX)
+
+En la laptop que sincroniza, en **PowerShell normal** (no hace falta
+administrador), desde `DBXExtralightBackend\deploy\onedrive`:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File instalar-copia.ps1 -Archivos "C:\Users\aramos\Finproject S.p.A\KPI's - Production\Produccion Inyección.xlsx" -Destino "\\172.16.101.124\AREAS\IT\DBX\SharePoint"
+```
+
+- Instala la tarea **DBX - copiar archivos de SharePoint**. Es de esa persona y
+  corre al iniciar sesión y cada 15 minutos mientras la sesión está iniciada.
+  No parpadea ninguna ventana.
+- Solo copia lo que cambió. Primero copia con un nombre temporal y luego
+  renombra, así el DBX nunca lee un archivo a medias. Conserva la fecha de
+  modificación de SharePoint.
+- Crea la carpeta de destino si no existe y prueba que se pueda escribir ahí.
+  Hace una primera copia y dice si quedó.
+- Log: `%LOCALAPPDATA%\DBX-copia\copia.log`.
+- Para sumar los Excel de Compound, se vuelve a correr con los tres archivos:
+  `-Archivos "ruta1","ruta2","ruta3"`. Para quitarla: `-Quitar`.
+
+En el DBX, la ubicación de cada archivo es la carpeta de destino
+(`\\172.16.101.124\AREAS\IT\DBX\SharePoint`). La cuenta del DBX tiene que poder
+leerla; con **Probar** se ve de inmediato.
+
+Si la laptop está apagada o fuera de la planta, simplemente no se copia. El
+DBX se queda con la última copia y se pone al día en la siguiente vuelta,
+porque cada carga lee el libro completo.
 
 Si el equipo que sincroniza se apaga o se cierra su sesión, los archivos dejan
 de actualizarse. Se nota en **Inicio → Sincronizaciones** ("último cambio
