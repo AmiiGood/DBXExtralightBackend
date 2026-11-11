@@ -2,20 +2,31 @@
   Deja el DBX arrancando solo: al encender el equipo (sin que nadie inicie
   sesión) y cada vez que se caiga.
 
-  Registra en el Programador de tareas, como SYSTEM:
+  Registra en el Programador de tareas:
     DBX - backend          node server.js        (logs\backend.log)
     DBX - frontend         vite preview de dist  (logs\frontend.log)
     DBX - reinicio semanal domingo 04:00: reinicia los dos y así rota los logs
 
   Uso (PowerShell como administrador, desde la carpeta del backend):
     powershell -ExecutionPolicy Bypass -File deploy\windows\instalar.ps1
+    ... -Usuario DOMINIO\usuario  corre con esa cuenta en vez de SYSTEM (ver abajo)
+    ... -ProbarRuta "\\servidor\carpeta"  con -Usuario: revisa que esa cuenta la pueda leer
     ... -Frontend D:\DBX\DBXExtralightFrontend -PuertoFrontend 5173
     ... -Forzar      cierra lo que ya esté ocupando los puertos (las consolas de antes)
     ... -Quitar      detiene el DBX y borra las tareas
 
+  ¿SYSTEM o una cuenta? SYSTEM no necesita contraseña, pero en la red entra
+  como la cuenta del EQUIPO, no como una persona: las carpetas compartidas
+  (Customer Service, CAPEX, AIMS en \\172.16.101.124\AREAS) le dicen "sin
+  permiso" aunque tú sí entres. Con -Usuario las tareas corren con esa cuenta
+  y entran a la red con sus permisos. Pide la contraseña una vez y la guarda
+  el Programador de tareas; si la contraseña cambia, vuelve a correr esto.
+
   Se puede volver a correr cuantas veces sea: reemplaza las tareas.
 #>
 param(
+  [string]$Usuario,
+  [string]$ProbarRuta,
   [string]$Frontend,
   [int]$PuertoFrontend = 5173,
   [switch]$Forzar,
@@ -58,6 +69,52 @@ Escribir "Node $(& node -v) en $(Split-Path $node.Source -Parent)"
 $PuertoBackend = Puerto-Backend
 Escribir "Backend:  $($script:Backend)  (puerto $PuertoBackend, del .env)"
 Escribir "Frontend: $Frontend  (puerto $PuertoFrontend)"
+
+# ---------------------------------------------------------------------------
+# 1b. Con qué cuenta corren las tareas (antes de detener nada: si la
+#     contraseña está mal, el DBX sigue arriba como estaba)
+# ---------------------------------------------------------------------------
+$anterior = if (Test-Path $script:ArchivoConfig) { (Leer-Config).Usuario } else { $null }
+$credencial = $null
+if ($Usuario) {
+  $credencial = Get-Credential -UserName $Usuario -Message "Contraseña de $Usuario. La guarda el Programador de tareas para arrancar el DBX sin que nadie inicie sesión."
+  if (-not $credencial) { throw 'Sin contraseña no se puede registrar la tarea con esa cuenta.' }
+  $clave = $credencial.GetNetworkCredential().Password
+
+  # El Programador de tareas valida la contraseña al registrar: se prueba con
+  # una tarea desechable. Con -ProbarRuta, esa tarea además revisa la carpeta.
+  $tmp = Join-Path $env:SystemRoot "Temp\dbx-prueba-$([guid]::NewGuid().ToString('N')).txt"
+  $orden = if ($ProbarRuta) {
+    $ruta = $ProbarRuta -replace "'", "''"
+    '$(if (Test-Path -LiteralPath ''{0}'') {{ ''SI'' }} else {{ ''NO'' }}) | Set-Content -LiteralPath ''{1}''' -f $ruta, $tmp
+  } else { '''OK'' | Set-Content -LiteralPath ''{0}''' -f $tmp }
+  $accionP = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument "-NoProfile -Command `"$orden`""
+  # Sin estos ajustes, en un equipo con batería la tarea se queda "en cola"
+  $ajustesP = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Minutes 2)
+  try {
+    Register-ScheduledTask -TaskName 'DBX - prueba de cuenta' -Action $accionP -Settings $ajustesP -User $credencial.UserName -Password $clave `
+      -RunLevel Highest -Force -ErrorAction Stop | Out-Null
+  } catch {
+    throw "No se pudo usar la cuenta $($credencial.UserName): $($_.Exception.Message)"
+  }
+  try {
+    Start-ScheduledTask -TaskName 'DBX - prueba de cuenta'
+    $fin = (Get-Date).AddSeconds(40)
+    while (-not (Test-Path $tmp) -and (Get-Date) -lt $fin) { Start-Sleep -Seconds 1 }
+    $resultado = if (Test-Path $tmp) { (Get-Content $tmp -Raw).Trim() } else { $null }
+  } finally {
+    Unregister-ScheduledTask -TaskName 'DBX - prueba de cuenta' -Confirm:$false -ErrorAction SilentlyContinue
+    Remove-Item $tmp -ErrorAction SilentlyContinue
+  }
+  if (-not $resultado) { throw "La cuenta $($credencial.UserName) no pudo correr una tarea de prueba. ¿Tiene permiso de 'Iniciar sesión como proceso por lotes'?" }
+  if ($ProbarRuta -and $resultado -ne 'SI') {
+    throw "La cuenta $($credencial.UserName) NO puede leer '$ProbarRuta'. Usa otra cuenta o pide a TI el permiso de lectura."
+  }
+  Escribir "Cuenta: $($credencial.UserName) (contraseña correcta$(if ($ProbarRuta) { ", sí lee $ProbarRuta" }))" 'Green'
+} else {
+  Escribir 'Cuenta: SYSTEM (no entra a carpetas compartidas de la red; para eso usa -Usuario)'
+  if ($anterior) { Escribir "  Ojo: antes corría con $anterior. Para seguir con esa cuenta, agrega -Usuario $anterior" 'Yellow' }
+}
 
 # ---------------------------------------------------------------------------
 # 2. Lo que esté ocupando los puertos (las consolas de antes)
@@ -106,14 +163,23 @@ $ajustes = New-ScheduledTaskSettingsSet -ExecutionTimeLimit ([TimeSpan]::Zero) -
   -DontStopIfGoingOnBatteries -MultipleInstances IgnoreNew
 $alEncender = New-ScheduledTaskTrigger -AtStartup
 
+# Backend y frontend corren con la cuenta elegida (o SYSTEM). Con cuenta, la
+# tarea es "ejecutar aunque el usuario no haya iniciado sesión".
+function Registrar-Tarea($nombre, $accion, $descripcion) {
+  $comunes = @{ TaskName = $nombre; Action = $accion; Trigger = $alEncender; Settings = $ajustes; Description = $descripcion; Force = $true }
+  if ($credencial) {
+    Register-ScheduledTask @comunes -User $credencial.UserName -Password $clave -RunLevel Highest | Out-Null
+  } else {
+    Register-ScheduledTask @comunes -Principal $sistema | Out-Null
+  }
+}
+
 $accionB = New-ScheduledTaskAction -Execute (Join-Path $PSScriptRoot 'iniciar-backend.cmd') -WorkingDirectory $script:Backend
-Register-ScheduledTask -TaskName $script:TareaBackend -Action $accionB -Trigger $alEncender -Principal $sistema `
-  -Settings $ajustes -Description 'Backend del DBX Extralight. Arranca al encender el equipo y se levanta solo si se cae. Log: logs\backend.log' -Force | Out-Null
+Registrar-Tarea $script:TareaBackend $accionB 'Backend del DBX Extralight. Arranca al encender el equipo y se levanta solo si se cae. Log: logs\backend.log'
 
 $accionF = New-ScheduledTaskAction -Execute (Join-Path $PSScriptRoot 'iniciar-frontend.cmd') `
   -Argument "`"$Frontend`" $PuertoFrontend" -WorkingDirectory $Frontend
-Register-ScheduledTask -TaskName $script:TareaFrontend -Action $accionF -Trigger $alEncender -Principal $sistema `
-  -Settings $ajustes -Description 'Frontend del DBX Extralight (dist con vite preview). Arranca al encender el equipo y se levanta solo si se cae. Log: logs\frontend.log del backend' -Force | Out-Null
+Registrar-Tarea $script:TareaFrontend $accionF 'Frontend del DBX Extralight (dist con vite preview). Arranca al encender el equipo y se levanta solo si se cae. Log: logs\frontend.log del backend'
 
 $accionR = New-ScheduledTaskAction -Execute 'powershell.exe' `
   -Argument "-NoProfile -ExecutionPolicy Bypass -File `"$PSScriptRoot\reiniciar.ps1`"" -WorkingDirectory $script:Backend
@@ -122,7 +188,11 @@ Register-ScheduledTask -TaskName $script:TareaReinicio -Action $accionR `
   -Trigger (New-ScheduledTaskTrigger -Weekly -DaysOfWeek Sunday -At '04:00') -Principal $sistema -Settings $ajustesR `
   -Description 'Reinicia el DBX los domingos a las 04:00: libera memoria y rota los logs que pasen de 20 MB.' -Force | Out-Null
 
-[pscustomobject]@{ Frontend = $Frontend; PuertoFrontend = $PuertoFrontend; Instalado = (Get-Date).ToString('yyyy-MM-dd HH:mm') } |
+[pscustomobject]@{
+  Frontend = $Frontend; PuertoFrontend = $PuertoFrontend
+  Usuario = if ($credencial) { $credencial.UserName } else { $null }
+  Instalado = (Get-Date).ToString('yyyy-MM-dd HH:mm')
+} |
   ConvertTo-Json | Set-Content -Path $script:ArchivoConfig -Encoding UTF8
 
 Escribir "Tareas registradas: $($script:TareaBackend), $($script:TareaFrontend), $($script:TareaReinicio)" 'Green'

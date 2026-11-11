@@ -9,7 +9,9 @@ Todo está en `deploy\windows\`, dentro de la carpeta del backend.
 
 ## Qué instala
 
-El instalador crea tres tareas en el Programador de tareas. Corren como **SYSTEM**:
+El instalador crea tres tareas en el Programador de tareas. Corren como
+**SYSTEM** o, con `-Usuario`, con la cuenta que le digas (ver "Carpetas
+compartidas de la red"):
 
 | Tarea | Qué hace | Log |
 |---|---|---|
@@ -45,6 +47,43 @@ Qué hace:
 
 3. **Prueba de verdad:** reinicia el servidor y **no inicies sesión**. Desde
    otra computadora abre el DBX. Debe cargar en uno o dos minutos.
+
+## Carpetas compartidas de la red (Customer Service, CAPEX, AIMS)
+
+Si en la pantalla de archivos sale *Sin permiso para leer
+"\\172.16.101.124\AREAS\..."* aunque tú sí puedas abrir la carpeta, es por
+la cuenta con la que corre el DBX. **SYSTEM** no entra a la red como una
+persona, sino como la cuenta del equipo, y esa cuenta no tiene permiso en el
+recurso compartido. Antes, con las consolas abiertas, el backend corría con
+tu sesión y usaba tus permisos.
+
+Para arreglarlo, vuelve a instalar con una cuenta que sí lea esas carpetas:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File deploy\windows\instalar.ps1 -Usuario DOMINIO\usuario -ProbarRuta "\\172.16.101.124\AREAS\Customer Service\Metricos Clientes"
+```
+
+- Te pide la contraseña de esa cuenta **una vez**. La guarda el Programador de
+  tareas (cifrada), y así el DBX arranca al encender el equipo sin que nadie
+  inicie sesión.
+- Antes de tocar nada, prueba que la contraseña sea correcta. Con
+  `-ProbarRuta`, también prueba que esa cuenta pueda leer la carpeta. Si algo
+  falla, se detiene y el DBX sigue como estaba.
+- Si es una cuenta local del servidor, se escribe `NOMBRE-DEL-SERVIDOR\usuario`.
+- La cuenta debe poder escribir en las carpetas del DBX, por los logs y la
+  compilación. Lo más fácil es que sea administradora del servidor.
+- **Si la contraseña de esa cuenta cambia o vence**, el DBX ya no arranca.
+  Vuelve a correr el mismo comando con la contraseña nueva. Conviene usar una
+  cuenta de servicio cuya contraseña no venza, no la personal de alguien.
+
+La otra opción es que TI le dé permiso de lectura en el recurso compartido a
+la cuenta del equipo (`DOMINIO\NOMBRE-DEL-SERVIDOR$`). Esa opción solo sirve
+si el servidor está en el dominio.
+
+**Usa rutas de red, no letras de unidad.** Una tarea programada no ve las
+unidades mapeadas (`F:\`, `Z:\`), aunque tú las veas en tu sesión. En las
+pantallas de archivos de CAPEX, AIMS y Customer Service la carpeta debe ser
+`\\172.16.101.124\AREAS\...`, no `F:\...`.
 
 ## Además del software (si no, el equipo ni siquiera prende)
 
@@ -86,7 +125,7 @@ Al detener ahí, el `node` puede quedar vivo; `reiniciar.ps1` sí lo cierra.
 | `instalar.ps1` | Registra las tareas (o las quita con `-Quitar`). Se puede volver a correr. |
 | `iniciar-backend.cmd`, `iniciar-frontend.cmd` | Lo que corre cada tarea: levantan node y, si se cae, lo vuelven a levantar. |
 | `reiniciar.ps1`, `actualizar.ps1`, `comun.ps1` | Reiniciar, actualizar y lo que comparten. |
-| `node-dir.txt`, `instalacion.json` | Los genera el instalador en cada equipo (no van a git): dónde está Node, la carpeta del frontend y su puerto. |
+| `node-dir.txt`, `instalacion.json` | Los genera el instalador en cada equipo (no van a git): dónde está Node, la carpeta del frontend, su puerto y la cuenta con la que corre (nunca la contraseña). |
 
 Lo probé en local con tareas de mi usuario. Funcionó:
 
