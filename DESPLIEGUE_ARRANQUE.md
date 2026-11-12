@@ -96,6 +96,14 @@ pantallas de archivos de CAPEX, AIMS y Customer Service la carpeta debe ser
 
 ## Día a día
 
+Lo más fácil: en `deploywindows` da **doble clic** en `actualizar.cmd` o
+`reiniciar.cmd`. Piden permisos de administrador (acepta el aviso de Windows),
+corren el `.ps1` y dejan la ventana abierta para leer el resultado; se cierra
+con cualquier tecla. Un `.ps1` con doble clic se abre en el Bloc de notas, y
+con "Ejecutar con PowerShell" no tiene permisos y la ventana se cierra sola.
+
+Lo mismo a mano:
+
 | Qué | Cómo (PowerShell como administrador, en la carpeta del backend) |
 |---|---|
 | Traer una versión nueva | `powershell -ExecutionPolicy Bypass -File deploy\windows\actualizar.ps1` |
@@ -125,6 +133,7 @@ Al detener ahí, el `node` puede quedar vivo; `reiniciar.ps1` sí lo cierra.
 | `instalar.ps1` | Registra las tareas (o las quita con `-Quitar`). Se puede volver a correr. |
 | `iniciar-backend.cmd`, `iniciar-frontend.cmd` | Lo que corre cada tarea: levantan node y, si se cae, lo vuelven a levantar. |
 | `reiniciar.ps1`, `actualizar.ps1`, `comun.ps1` | Reiniciar, actualizar y lo que comparten. |
+| `actualizar.cmd`, `reiniciar.cmd` | Los mismos dos, de doble clic: piden administrador y no cierran la ventana. |
 | `node-dir.txt`, `instalacion.json` | Los genera el instalador en cada equipo (no van a git): dónde está Node, la carpeta del frontend, su puerto y la cuenta con la que corre (nunca la contraseña). |
 
 Lo probé en local con tareas de mi usuario. Funcionó:
