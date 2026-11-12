@@ -2,8 +2,12 @@ const db = require("../config/database");
 const { AppError } = require("../utils/errorHandler");
 
 /**
- * Catálogos de los formatos de compra: tipos (los pone Compras) y cuentas
- * contables (las pone Finanzas).
+ * Catálogos de los formatos de compra: tipos (los pone Compras), cuentas
+ * contables (las pone Finanzas) y áreas solicitantes.
+ *
+ * Áreas: las ligadas a un tema del osTicket de Compras se configuran en
+ * Aprobadores y aquí solo se listan. Las que no tienen tema (compran sin
+ * ticket, migración 10) se agregan, renombran y desactivan aquí.
  *
  * Ver migrations/2026-11-11_compras_solicitudes_09_catalogos.sql. Los formatos
  * guardan el texto (nombre del tipo, número de cuenta), así que renombrar un
@@ -18,11 +22,55 @@ class CompraCatalogo {
   static soloDigitos = soloDigitos;
 
   static async listar() {
-    const [tipos, cuentas] = await Promise.all([
+    const [tipos, cuentas, areas] = await Promise.all([
       db.query("SELECT id, nombre, activo FROM compras_tipos ORDER BY lower(nombre)"),
       db.query("SELECT codigo, nombre, activo FROM compras_cuentas ORDER BY codigo"),
+      db.query(
+        `SELECT id, nombre, activo, osticket_topic_id IS NOT NULL AS con_osticket
+           FROM compras_areas ORDER BY lower(nombre)`,
+      ),
     ]);
-    return { tipos: tipos.rows, cuentas: cuentas.rows };
+    return { tipos: tipos.rows, cuentas: cuentas.rows, areasLista: areas.rows };
+  }
+
+  static async crearArea(body, usuarioId) {
+    const nombre = limpio(body.nombre);
+    if (!nombre) throw new AppError("Falta el nombre del área", 400);
+    if (nombre.length > 120) throw new AppError("El nombre es demasiado largo (máximo 120)", 400);
+    try {
+      const { rows } = await db.query(
+        `INSERT INTO compras_areas (nombre, actualizado_por) VALUES ($1, $2)
+         RETURNING id, nombre, activo, false AS con_osticket`,
+        [nombre, usuarioId],
+      );
+      return rows[0];
+    } catch (e) {
+      if (e.code === "23505") throw new AppError(`Ya existe el área "${nombre}"`, 409);
+      throw e;
+    }
+  }
+
+  /** Solo las áreas sin tema de osTicket: las otras se manejan en Aprobadores. */
+  static async actualizarArea(id, body, usuarioId) {
+    const nombre = limpio(body.nombre);
+    if (!nombre) throw new AppError("Falta el nombre del área", 400);
+    if (nombre.length > 120) throw new AppError("El nombre es demasiado largo (máximo 120)", 400);
+    const { rows: actual } = await db.query("SELECT osticket_topic_id FROM compras_areas WHERE id = $1", [id]);
+    if (!actual[0]) throw new AppError("No existe esa área", 404);
+    if (actual[0].osticket_topic_id != null) {
+      throw new AppError("Esa área está ligada al osTicket de Compras; se configura en Aprobadores", 400);
+    }
+    try {
+      const { rows } = await db.query(
+        `UPDATE compras_areas SET nombre = $1, activo = $2, actualizado_por = $3, actualizado_en = now()
+          WHERE id = $4 RETURNING id, nombre, activo, false AS con_osticket`,
+        [nombre, body.activo !== false, usuarioId, id],
+      );
+      return rows[0];
+    } catch (e) {
+      if (e.code === "23505") throw new AppError(`Ya existe el área "${nombre}"`, 409);
+      throw e;
+    }
   }
 
   static async crearTipo(body, usuarioId) {

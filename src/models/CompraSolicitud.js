@@ -442,6 +442,8 @@ class CompraSolicitud {
          FROM compras_areas ca
          LEFT JOIN usuarios g ON g.id = ca.gerente_id
          LEFT JOIN usuarios p ON p.id = ca.suplente_id
+        -- Las áreas sin tema (solo Formatos) no reciben solicitudes
+        WHERE ca.osticket_topic_id IS NOT NULL
         ORDER BY ca.nombre`,
     );
     return rows;
@@ -502,6 +504,13 @@ class CompraSolicitud {
   }
 
   static async ligarAreaDbx(areaDbxId, comprasAreaId) {
+    if (comprasAreaId) {
+      const { rows: ca } = await db.query("SELECT osticket_topic_id FROM compras_areas WHERE id = $1", [comprasAreaId]);
+      if (!ca[0]) throw new AppError("El área de Compras no existe", 404);
+      if (ca[0].osticket_topic_id == null) {
+        throw new AppError("Esa área no tiene tema en el osTicket de Compras: sus solicitudes no llegarían a nadie", 400);
+      }
+    }
     const { rows } = await db.query(
       `UPDATE areas SET compras_area_id = $2 WHERE id = $1 RETURNING id, nombre, compras_area_id`,
       [areaDbxId, comprasAreaId || null],

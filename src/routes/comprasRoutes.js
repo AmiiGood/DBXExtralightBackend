@@ -314,13 +314,15 @@ router.get("/formatos", authenticate, puedeLeer(MODULO_FORMATOS), formatos.getFo
 router.get("/formatos/opciones", authenticate, puedeLeer(MODULO_FORMATOS), formatos.getOpciones);
 
 /**
- * @route   POST|PUT /api/compras/formatos/catalogos/(tipos|cuentas)[/:clave]
+ * @route   POST|PUT /api/compras/formatos/catalogos/(tipos|cuentas|areas)[/:clave]
  * @desc    Listas de tipos y cuentas; el controlador pide editar
  */
 router.post("/formatos/catalogos/tipos", authenticate, puedeEditar(MODULO_FORMATOS), formatos.postTipo);
 router.put("/formatos/catalogos/tipos/:id", authenticate, puedeEditar(MODULO_FORMATOS), formatos.putTipo);
 router.post("/formatos/catalogos/cuentas", authenticate, puedeEditar(MODULO_FORMATOS), formatos.postCuenta);
 router.put("/formatos/catalogos/cuentas/:codigo", authenticate, puedeEditar(MODULO_FORMATOS), formatos.putCuenta);
+router.post("/formatos/catalogos/areas", authenticate, puedeEditar(MODULO_FORMATOS), formatos.postArea);
+router.put("/formatos/catalogos/areas/:id", authenticate, puedeEditar(MODULO_FORMATOS), formatos.putArea);
 
 /**
  * @route   POST /api/compras/formatos

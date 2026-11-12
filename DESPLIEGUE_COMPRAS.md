@@ -39,8 +39,8 @@ En el servidor de producción, desde la carpeta del backend, con el `.env` que
 apunta a `dbx_ensayo`. Primero simuladas (validan y se revierten), luego de verdad:
 
 ```bash
-node scripts/aplicar-migracion.js 2026-10-02_compras_solicitudes_01_schema.sql 2026-10-02_compras_solicitudes_02_envio_osticket.sql 2026-10-02_compras_solicitudes_03_avisos.sql 2026-11-02_compras_solicitudes_04_cotizaciones.sql 2026-11-03_compras_solicitudes_05_nombre_tema_41.sql 2026-11-09_compras_solicitudes_06_presupuestos.sql 2026-11-10_compras_solicitudes_07_formatos.sql 2026-11-11_compras_solicitudes_08_tablero.sql 2026-11-11_compras_solicitudes_09_catalogos.sql --simular
-node scripts/aplicar-migracion.js 2026-10-02_compras_solicitudes_01_schema.sql 2026-10-02_compras_solicitudes_02_envio_osticket.sql 2026-10-02_compras_solicitudes_03_avisos.sql 2026-11-02_compras_solicitudes_04_cotizaciones.sql 2026-11-03_compras_solicitudes_05_nombre_tema_41.sql 2026-11-09_compras_solicitudes_06_presupuestos.sql 2026-11-10_compras_solicitudes_07_formatos.sql 2026-11-11_compras_solicitudes_08_tablero.sql 2026-11-11_compras_solicitudes_09_catalogos.sql
+node scripts/aplicar-migracion.js 2026-10-02_compras_solicitudes_01_schema.sql 2026-10-02_compras_solicitudes_02_envio_osticket.sql 2026-10-02_compras_solicitudes_03_avisos.sql 2026-11-02_compras_solicitudes_04_cotizaciones.sql 2026-11-03_compras_solicitudes_05_nombre_tema_41.sql 2026-11-09_compras_solicitudes_06_presupuestos.sql 2026-11-10_compras_solicitudes_07_formatos.sql 2026-11-11_compras_solicitudes_08_tablero.sql 2026-11-11_compras_solicitudes_09_catalogos.sql 2026-11-12_compras_solicitudes_10_areas_sin_ticket.sql --simular
+node scripts/aplicar-migracion.js 2026-10-02_compras_solicitudes_01_schema.sql 2026-10-02_compras_solicitudes_02_envio_osticket.sql 2026-10-02_compras_solicitudes_03_avisos.sql 2026-11-02_compras_solicitudes_04_cotizaciones.sql 2026-11-03_compras_solicitudes_05_nombre_tema_41.sql 2026-11-09_compras_solicitudes_06_presupuestos.sql 2026-11-10_compras_solicitudes_07_formatos.sql 2026-11-11_compras_solicitudes_08_tablero.sql 2026-11-11_compras_solicitudes_09_catalogos.sql 2026-11-12_compras_solicitudes_10_areas_sin_ticket.sql
 ```
 
 | Migración | Qué hace |
@@ -54,6 +54,7 @@ node scripts/aplicar-migracion.js 2026-10-02_compras_solicitudes_01_schema.sql 2
 | `07_formatos` | Captura del "Formato de autorización y registro de compras" en papel mientras el flujo con firmas no está en el sistema: tabla `compras_formatos` (un formato por ticket; quien firmó, tipo, cuenta y CC como texto) y módulo "Formatos de Compras". No toca nada de lo anterior. |
 | `08_tablero` | Módulo "Tablero de Compras" (solo consulta, para Dirección): gasto autorizado contra presupuesto por área, mes y tipo, en pesos o dólares. No crea tablas. |
 | `09_catalogos` | Listas de **tipos de compra** (27, de Compras) y **cuentas contables** (49, de Finanzas): tablas `compras_tipos` y `compras_cuentas`. La captura de formatos ya las escoge de la lista. Lo ya capturado que coincide salvo mayúsculas, espacios o guiones (p. ej. `6202-000014`) se deja igual que en la lista; lo que no coincide se respeta y la pantalla lo marca "fuera de la lista". Quien puede **editar** formatos mantiene las listas desde el botón "Listas". |
+| `10_areas_sin_ticket` | Un área solicitante ya no necesita tema del osTicket: en Formatos se captura toda compra, tenga o no ticket. Las áreas sin tema se agregan desde Formatos → Listas → Áreas y salen en Formatos, Presupuestos y Tablero, pero no en Solicitudes ni en Aprobadores. También evita dos áreas con el mismo nombre salvo mayúsculas o espacios. |
 
 Las seis son idempotentes: si una falla a la mitad se puede volver a correr.
 

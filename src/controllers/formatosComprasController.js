@@ -135,7 +135,25 @@ const putCuenta = catchAsync(async (req, res) => {
   sendSuccess(res, 200, c, "Cuenta guardada");
 });
 
+/** POST /api/compras/formatos/catalogos/areas */
+const postArea = catchAsync(async (req, res) => {
+  await exigirEditar(req);
+  const a = await Catalogo.crearArea(req.body, req.usuario.id);
+  await log(req, "CREATE", `Agregó el área solicitante "${a.nombre}" (sin osTicket)`, "compras_areas");
+  sendSuccess(res, 201, a, "Área agregada");
+});
+
+/** PUT /api/compras/formatos/catalogos/areas/:id  { nombre, activo } */
+const putArea = catchAsync(async (req, res) => {
+  await exigirEditar(req);
+  const id = parseInt(req.params.id, 10);
+  if (!Number.isInteger(id) || id <= 0) throw new AppError("Área inválida", 400);
+  const a = await Catalogo.actualizarArea(id, req.body, req.usuario.id);
+  await log(req, "UPDATE", `Cambió el área solicitante "${a.nombre}"${a.activo ? "" : ", inactiva"}`, "compras_areas");
+  sendSuccess(res, 200, a, "Área guardada");
+});
+
 module.exports = {
   getFormatos, getOpciones, postFormato, putFormato, deleteFormato,
-  postTipo, putTipo, postCuenta, putCuenta,
+  postTipo, putTipo, postCuenta, putCuenta, postArea, putArea,
 };
