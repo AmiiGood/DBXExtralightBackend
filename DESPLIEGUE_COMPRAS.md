@@ -39,8 +39,8 @@ En el servidor de producción, desde la carpeta del backend, con el `.env` que
 apunta a `dbx_ensayo`. Primero simuladas (validan y se revierten), luego de verdad:
 
 ```bash
-node scripts/aplicar-migracion.js 2026-10-02_compras_solicitudes_01_schema.sql 2026-10-02_compras_solicitudes_02_envio_osticket.sql 2026-10-02_compras_solicitudes_03_avisos.sql 2026-11-02_compras_solicitudes_04_cotizaciones.sql 2026-11-03_compras_solicitudes_05_nombre_tema_41.sql 2026-11-09_compras_solicitudes_06_presupuestos.sql 2026-11-10_compras_solicitudes_07_formatos.sql 2026-11-11_compras_solicitudes_08_tablero.sql --simular
-node scripts/aplicar-migracion.js 2026-10-02_compras_solicitudes_01_schema.sql 2026-10-02_compras_solicitudes_02_envio_osticket.sql 2026-10-02_compras_solicitudes_03_avisos.sql 2026-11-02_compras_solicitudes_04_cotizaciones.sql 2026-11-03_compras_solicitudes_05_nombre_tema_41.sql 2026-11-09_compras_solicitudes_06_presupuestos.sql 2026-11-10_compras_solicitudes_07_formatos.sql 2026-11-11_compras_solicitudes_08_tablero.sql
+node scripts/aplicar-migracion.js 2026-10-02_compras_solicitudes_01_schema.sql 2026-10-02_compras_solicitudes_02_envio_osticket.sql 2026-10-02_compras_solicitudes_03_avisos.sql 2026-11-02_compras_solicitudes_04_cotizaciones.sql 2026-11-03_compras_solicitudes_05_nombre_tema_41.sql 2026-11-09_compras_solicitudes_06_presupuestos.sql 2026-11-10_compras_solicitudes_07_formatos.sql 2026-11-11_compras_solicitudes_08_tablero.sql 2026-11-11_compras_solicitudes_09_catalogos.sql --simular
+node scripts/aplicar-migracion.js 2026-10-02_compras_solicitudes_01_schema.sql 2026-10-02_compras_solicitudes_02_envio_osticket.sql 2026-10-02_compras_solicitudes_03_avisos.sql 2026-11-02_compras_solicitudes_04_cotizaciones.sql 2026-11-03_compras_solicitudes_05_nombre_tema_41.sql 2026-11-09_compras_solicitudes_06_presupuestos.sql 2026-11-10_compras_solicitudes_07_formatos.sql 2026-11-11_compras_solicitudes_08_tablero.sql 2026-11-11_compras_solicitudes_09_catalogos.sql
 ```
 
 | Migración | Qué hace |
@@ -53,6 +53,7 @@ node scripts/aplicar-migracion.js 2026-10-02_compras_solicitudes_01_schema.sql 2
 | `06_presupuestos` | Presupuesto por área de Compras: un monto por mes (el anual es la suma), lo que se descuenta al elegir (sin IVA y en pesos, con el FIX del día si es en dólares), aviso SOBREGIRO al gerente y módulo "Presupuestos de Compras". Lo que no se gasta pasa al mes siguiente; rebasar no bloquea. |
 | `07_formatos` | Captura del "Formato de autorización y registro de compras" en papel mientras el flujo con firmas no está en el sistema: tabla `compras_formatos` (un formato por ticket; quien firmó, tipo, cuenta y CC como texto) y módulo "Formatos de Compras". No toca nada de lo anterior. |
 | `08_tablero` | Módulo "Tablero de Compras" (solo consulta, para Dirección): gasto autorizado contra presupuesto por área, mes y tipo, en pesos o dólares. No crea tablas. |
+| `09_catalogos` | Listas de **tipos de compra** (27, de Compras) y **cuentas contables** (49, de Finanzas): tablas `compras_tipos` y `compras_cuentas`. La captura de formatos ya las escoge de la lista. Lo ya capturado que coincide salvo mayúsculas, espacios o guiones (p. ej. `6202-000014`) se deja igual que en la lista; lo que no coincide se respeta y la pantalla lo marca "fuera de la lista". Quien puede **editar** formatos mantiene las listas desde el botón "Listas". |
 
 Las seis son idempotentes: si una falla a la mitad se puede volver a correr.
 

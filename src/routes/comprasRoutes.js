@@ -309,9 +309,18 @@ router.get("/formatos", authenticate, puedeLeer(MODULO_FORMATOS), formatos.getFo
 
 /**
  * @route   GET /api/compras/formatos/opciones
- * @desc    Áreas y lo ya capturado en cada campo, para sugerirlo
+ * @desc    Áreas, listas de tipos y cuentas, y lo ya capturado en los campos libres
  */
 router.get("/formatos/opciones", authenticate, puedeLeer(MODULO_FORMATOS), formatos.getOpciones);
+
+/**
+ * @route   POST|PUT /api/compras/formatos/catalogos/(tipos|cuentas)[/:clave]
+ * @desc    Listas de tipos y cuentas; el controlador pide editar
+ */
+router.post("/formatos/catalogos/tipos", authenticate, puedeEditar(MODULO_FORMATOS), formatos.postTipo);
+router.put("/formatos/catalogos/tipos/:id", authenticate, puedeEditar(MODULO_FORMATOS), formatos.putTipo);
+router.post("/formatos/catalogos/cuentas", authenticate, puedeEditar(MODULO_FORMATOS), formatos.postCuenta);
+router.put("/formatos/catalogos/cuentas/:codigo", authenticate, puedeEditar(MODULO_FORMATOS), formatos.putCuenta);
 
 /**
  * @route   POST /api/compras/formatos

@@ -1,4 +1,5 @@
 const Formato = require("../models/CompraFormato");
+const Catalogo = require("../models/CompraCatalogo");
 const RolModulo = require("../models/RolModulo");
 const { catchAsync, sendSuccess, AppError } = require("../utils/errorHandler");
 const { registrarLog, obtenerIP, obtenerUserAgent } = require("../utils/logger");
@@ -25,12 +26,12 @@ function idDe(req) {
 
 const fechaValida = (s) => (/^\d{4}-\d{2}-\d{2}$/.test(String(s || "")) ? s : null);
 
-function log(req, accion, descripcion) {
+function log(req, accion, descripcion, tabla = "compras_formatos") {
   return registrarLog({
     usuarioId: req.usuario.id,
     accion,
     modulo: "Formatos de Compras",
-    tablaAfectada: "compras_formatos",
+    tablaAfectada: tabla,
     descripcion,
     ipAddress: obtenerIP(req),
     userAgent: obtenerUserAgent(req),
@@ -89,4 +90,52 @@ const deleteFormato = catchAsync(async (req, res) => {
   sendSuccess(res, 200, { id }, "Formato borrado");
 });
 
-module.exports = { getFormatos, getOpciones, postFormato, putFormato, deleteFormato };
+// ---------------------------------------------------------------------------
+// Listas de tipos (Compras) y cuentas (Finanzas). Las mantiene quien puede
+// corregir cualquier formato (editar) o el admin.
+// ---------------------------------------------------------------------------
+
+async function exigirEditar(req) {
+  const p = await permisos(req.usuario);
+  if (!p.editar) throw new AppError("Para cambiar las listas necesitas poder editar formatos", 403);
+}
+
+/** POST /api/compras/formatos/catalogos/tipos */
+const postTipo = catchAsync(async (req, res) => {
+  await exigirEditar(req);
+  const t = await Catalogo.crearTipo(req.body, req.usuario.id);
+  await log(req, "CREATE", `Agregó el tipo de compra "${t.nombre}"`, "compras_tipos");
+  sendSuccess(res, 201, t, "Tipo agregado");
+});
+
+/** PUT /api/compras/formatos/catalogos/tipos/:id  { nombre, activo } */
+const putTipo = catchAsync(async (req, res) => {
+  await exigirEditar(req);
+  const id = parseInt(req.params.id, 10);
+  if (!Number.isInteger(id) || id <= 0) throw new AppError("Tipo inválido", 400);
+  const t = await Catalogo.actualizarTipo(id, req.body, req.usuario.id);
+  const cambio = t.anterior !== t.nombre ? ` (antes "${t.anterior}", ${t.formatos} formatos corregidos)` : "";
+  await log(req, "UPDATE", `Cambió el tipo de compra "${t.nombre}"${cambio}${t.activo ? "" : ", inactivo"}`, "compras_tipos");
+  sendSuccess(res, 200, t, "Tipo guardado");
+});
+
+/** POST /api/compras/formatos/catalogos/cuentas */
+const postCuenta = catchAsync(async (req, res) => {
+  await exigirEditar(req);
+  const c = await Catalogo.crearCuenta(req.body, req.usuario.id);
+  await log(req, "CREATE", `Agregó la cuenta ${c.codigo} ${c.nombre}`, "compras_cuentas");
+  sendSuccess(res, 201, c, "Cuenta agregada");
+});
+
+/** PUT /api/compras/formatos/catalogos/cuentas/:codigo  { nombre, activo } */
+const putCuenta = catchAsync(async (req, res) => {
+  await exigirEditar(req);
+  const c = await Catalogo.actualizarCuenta(req.params.codigo, req.body, req.usuario.id);
+  await log(req, "UPDATE", `Cambió la cuenta ${c.codigo} ${c.nombre}${c.activo ? "" : ", inactiva"}`, "compras_cuentas");
+  sendSuccess(res, 200, c, "Cuenta guardada");
+});
+
+module.exports = {
+  getFormatos, getOpciones, postFormato, putFormato, deleteFormato,
+  postTipo, putTipo, postCuenta, putCuenta,
+};

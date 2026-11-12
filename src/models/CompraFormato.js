@@ -1,5 +1,6 @@
 const db = require("../config/database");
 const { AppError } = require("../utils/errorHandler");
+const Catalogo = require("./CompraCatalogo");
 
 /**
  * Formatos de autorización y registro de compras (los de papel).
@@ -8,6 +9,9 @@ const { AppError } = require("../utils/errorHandler");
  * mientras el flujo con firmas no está en el sistema; quien firmó va como texto.
  * Los montos en dólares se pasan a pesos con el FIX de Banxico del día del
  * formato (o el último publicado antes), solo para sumar en el reporte.
+ *
+ * Tipo y cuenta se escogen de las listas de Compras y Finanzas (CompraCatalogo);
+ * se guarda el texto, y lo capturado a mano antes de las listas se respeta.
  */
 
 const SERIE_FIX = "SF43718";
@@ -46,7 +50,7 @@ const SELECT = `
          f.compras_area_id, ca.nombre AS area_nombre,
          f.requerimiento, f.monto::float AS monto, f.moneda,
          f.autorizo_gerente, f.clasif_tipo, f.autorizo_compras,
-         f.cuenta, f.centro_costos, f.autorizo_finanzas, f.autorizo_direccion,
+         f.cuenta, cc.nombre AS cuenta_nombre, f.centro_costos, f.autorizo_finanzas, f.autorizo_direccion,
          f.observaciones,
          f.capturado_por, cu.nombre_completo AS capturado_por_nombre,
          to_char(f.capturado_en, 'YYYY-MM-DD HH24:MI') AS capturado_en,
@@ -57,6 +61,7 @@ const SELECT = `
               WHEN tc.valor IS NOT NULL THEN round(f.monto * tc.valor, 2)::float END AS monto_mxn
     FROM compras_formatos f
     JOIN compras_areas ca ON ca.id = f.compras_area_id
+    LEFT JOIN compras_cuentas cc ON cc.codigo = f.cuenta
     LEFT JOIN usuarios cu ON cu.id = f.capturado_por
     LEFT JOIN usuarios au ON au.id = f.actualizado_por
     -- FIX del día o el último antes; si no hay, el más cercano después
@@ -96,7 +101,7 @@ class CompraFormato {
       const q = p(`%${f.q}%`);
       where.push(
         `(f.ticket ILIKE ${q} OR f.requerimiento ILIKE ${q} OR f.clasif_tipo ILIKE ${q}
-          OR f.cuenta ILIKE ${q} OR f.centro_costos ILIKE ${q} OR f.observaciones ILIKE ${q})`,
+          OR f.cuenta ILIKE ${q} OR cc.nombre ILIKE ${q} OR f.centro_costos ILIKE ${q} OR f.observaciones ILIKE ${q})`,
       );
     }
     const { rows } = await db.query(
@@ -145,7 +150,7 @@ class CompraFormato {
   }
 
   static async crear(body, usuarioId) {
-    const d = CompraFormato.normalizar(body);
+    const d = await Catalogo.validarFormato(CompraFormato.normalizar(body));
     const cols = Object.keys(d);
     try {
       const { rows } = await db.query(
@@ -161,7 +166,8 @@ class CompraFormato {
   }
 
   static async actualizar(id, body, usuarioId) {
-    const d = CompraFormato.normalizar(body);
+    const anterior = await CompraFormato.obtener(id);
+    const d = await Catalogo.validarFormato(CompraFormato.normalizar(body), anterior);
     const cols = Object.keys(d);
     try {
       const { rowCount } = await db.query(
@@ -191,8 +197,8 @@ class CompraFormato {
   }
 
   /**
-   * Para la captura: las áreas y lo ya escrito en cada campo, para sugerirlo
-   * mientras no hay catálogos de Compras y Finanzas.
+   * Para la captura: las áreas, las listas de tipos y cuentas, y lo ya escrito
+   * en los campos libres (centro de costos, quién firmó) para sugerirlo.
    */
   static async opciones() {
     const { rows: areas } = await db.query(
@@ -213,7 +219,7 @@ class CompraFormato {
     const sugerencias = Object.fromEntries(campos.map((c) => [c, []]));
     for (const r of rows) sugerencias[r.campo].push(r.valor);
     for (const n of DIRECCION) if (!sugerencias.autorizo_direccion.includes(n)) sugerencias.autorizo_direccion.push(n);
-    return { areas, sugerencias };
+    return { areas, sugerencias, ...(await Catalogo.listar()) };
   }
 }
 

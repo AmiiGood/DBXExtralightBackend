@@ -27,7 +27,7 @@ class CompraTablero {
       db.query(
         `SELECT f.id, to_char(f.fecha, 'YYYY-MM-DD') AS fecha, f.ticket,
                 f.compras_area_id AS area_id, ca.nombre AS area_nombre,
-                f.requerimiento, f.clasif_tipo, f.cuenta, f.centro_costos,
+                f.requerimiento, f.clasif_tipo, f.cuenta, cc.nombre AS cuenta_nombre, f.centro_costos,
                 f.monto::float AS monto, f.moneda,
                 tc.valor::float AS tipo_cambio,
                 CASE WHEN f.moneda = 'MXN' THEN f.monto::float
@@ -40,6 +40,7 @@ class CompraTablero {
                  AND nullif(f.autorizo_direccion, '') IS NOT NULL AND nullif(f.autorizo_finanzas, '') IS NOT NULL) AS completo
            FROM compras_formatos f
            JOIN compras_areas ca ON ca.id = f.compras_area_id
+           LEFT JOIN compras_cuentas cc ON cc.codigo = f.cuenta
            -- El FIX del día o el último antes; si el formato es más viejo que
            -- el primer FIX guardado, el más cercano después (mejor que dejarlo fuera)
            LEFT JOIN LATERAL (
