@@ -2,13 +2,18 @@ const fs = require("fs");
 const db = require("../config/database");
 const RolModulo = require("./RolModulo");
 const Presupuesto = require("./CompraPresupuesto");
-const tipoCambio = require("../services/tipoCambio.service");
 const { rutaAbsoluta } = require("../services/comprasArchivos.service");
 const { AppError } = require("../utils/errorHandler");
 
 /**
  * Cotizaciones de Compras: las opciones de proveedores que el agente manda al
- * solicitante, y la que éste elige.
+ * solicitante, la que éste sugiere y la que Compras decide.
+ *
+ * Flujo (13-nov-2026): COTIZADA → el solicitante SUGIERE una opción con su
+ * opinión técnica (SUGERIDA) o pide otras → Compras DECIDE (DECIDIDA). La
+ * sugerencia no obliga, pero si Compras escoge otra tiene que decir por qué.
+ * Decidir no descuenta presupuesto: eso pasa al autorizarse la orden de compra.
+ * ELEGIDA queda solo para las solicitudes de antes, que eligió el solicitante.
  *
  * Ver migrations/2026-11-02_compras_solicitudes_04_cotizaciones.sql.
  *
@@ -31,8 +36,14 @@ const F = (col) => `to_char(${col}, 'YYYY-MM-DD"T"HH24:MI:SS')`;
 const VISTAS = {
   "por-cotizar": { estados: ["EN_COMPRAS"], orden: "s.enviado_en ASC" },
   esperando: { estados: ["COTIZADA"], orden: "c.enviada_en ASC" },
-  elegidas: { estados: ["ELEGIDA"], orden: "s.elegido_en DESC" },
+  "por-decidir": { estados: ["SUGERIDA"], orden: "s.sugerido_en ASC" },
+  decididas: { estados: ["DECIDIDA", "ELEGIDA"], orden: "s.elegido_en DESC" },
 };
+// Los correos viejos traen ?vista=elegidas
+VISTAS.elegidas = VISTAS.decididas;
+
+// Mientras se puede sugerir o decidir
+const POR_DECIDIR = ["COTIZADA", "SUGERIDA"];
 
 const esAdmin = (u) => Boolean(u?.rol?.esAdmin || u?.rol?.es_admin);
 const correoDe = (u) => (u?.email || "").trim().toLowerCase();
@@ -103,6 +114,7 @@ class CompraCotizacion {
               ${F("s.elegido_en")} AS elegido_en,
               s.monto_elegido::float AS monto_elegido, s.moneda_elegida,
               o.proveedor AS proveedor_elegido,
+              os.proveedor AS proveedor_sugerido, ${F("s.sugerido_en")} AS sugerido_en,
               ca.nombre AS area_nombre, us.nombre_completo AS solicitante_nombre,
               EXISTS (SELECT 1 FROM compras_cotizaciones b WHERE b.solicitud_id = s.id AND b.estado = 'BORRADOR') AS con_borrador,
               (SELECT count(*)::int FROM compras_cotizaciones d WHERE d.solicitud_id = s.id AND d.estado = 'DESCARTADA') AS descartadas
@@ -111,6 +123,7 @@ class CompraCotizacion {
          JOIN usuarios us ON us.id = s.solicitante_id
          LEFT JOIN compras_cotizaciones c ON c.solicitud_id = s.id AND c.estado = 'ENVIADA'
          LEFT JOIN compras_cotizacion_opciones o ON o.id = s.opcion_elegida_id
+         LEFT JOIN compras_cotizacion_opciones os ON os.id = s.opcion_sugerida_id
         WHERE s.estado = ANY($1)${filtro}
         ORDER BY ${v.orden}
         LIMIT 300`,
@@ -130,8 +143,9 @@ class CompraCotizacion {
     }
     const { rows } = await db.query(
       `SELECT count(*) FILTER (WHERE estado = 'EN_COMPRAS')::int AS "por-cotizar",
-              count(*) FILTER (WHERE estado = 'COTIZADA')::int AS esperando
-         FROM compras_solicitudes WHERE estado IN ('EN_COMPRAS', 'COTIZADA')${filtro}`,
+              count(*) FILTER (WHERE estado = 'COTIZADA')::int AS esperando,
+              count(*) FILTER (WHERE estado = 'SUGERIDA')::int AS "por-decidir"
+         FROM compras_solicitudes WHERE estado IN ('EN_COMPRAS', 'COTIZADA', 'SUGERIDA')${filtro}`,
       valores,
     );
     return rows[0];
@@ -219,9 +233,9 @@ class CompraCotizacion {
   }
 
   /**
-   * Lo que ve el solicitante: la enviada vigente (o la que eligió), cuántas se
-   * descartaron y, mientras puede elegir, cuánto descontaría cada opción del
-   * presupuesto de su área.
+   * Lo que ve el solicitante: la enviada vigente, cuántas se descartaron y,
+   * mientras no se decide, cuánto descontaría cada opción del presupuesto de su
+   * área (solo para informar: se descuenta al autorizarse la orden de compra).
    */
   static async paraSolicitante(solicitudId) {
     const { rows } = await db.query(
@@ -237,7 +251,9 @@ class CompraCotizacion {
     );
     const cotizacion = rows[0]?.id ? await this.completa(rows[0].id) : null;
     const impacto =
-      cotizacion && rows[0].estado === "COTIZADA" ? await Presupuesto.impacto(cotizacion, rows[0].compras_area_id) : null;
+      cotizacion && POR_DECIDIR.includes(rows[0].estado)
+        ? await Presupuesto.impacto(cotizacion, rows[0].compras_area_id)
+        : null;
     return { cotizacion, descartadas: d[0].n, impacto };
   }
 
@@ -247,6 +263,8 @@ class CompraCotizacion {
     const { rows } = await db.query(
       `SELECT s.id, s.folio, s.asunto, s.detalle, s.estado, s.osticket_numero, s.osticket_estado,
               s.asignado_nombre, s.asignado_email, s.opcion_elegida_id, s.compras_area_id,
+              s.opcion_sugerida_id, s.sugerencia, ${F("s.sugerido_en")} AS sugerido_en, s.decision_nota,
+              ue.nombre_completo AS elegido_por_nombre,
               s.monto_presupuesto::float AS monto_presupuesto,
               s.monto_elegido::float AS monto_elegido, s.moneda_elegida,
               ${F("s.creado_en")} AS creado_en, ${F("s.enviado_en")} AS enviado_en, ${F("s.elegido_en")} AS elegido_en,
@@ -256,7 +274,8 @@ class CompraCotizacion {
          JOIN compras_areas ca ON ca.id = s.compras_area_id
          JOIN usuarios us ON us.id = s.solicitante_id
          LEFT JOIN usuarios ud ON ud.id = s.decidido_por
-        WHERE s.id = $1 AND s.estado IN ('EN_COMPRAS', 'COTIZADA', 'ELEGIDA')`,
+         LEFT JOIN usuarios ue ON ue.id = s.elegido_por
+        WHERE s.id = $1 AND s.estado IN ('EN_COMPRAS', 'COTIZADA', 'SUGERIDA', 'DECIDIDA', 'ELEGIDA')`,
       [solicitudId],
     );
     const sol = rows[0];
@@ -279,17 +298,21 @@ class CompraCotizacion {
     const deEstado = (e) => cots.rows.filter((c) => c.estado === e);
     const borrador = deEstado("BORRADOR")[0];
     const enviada = deEstado("ENVIADA")[0];
+    const enviadaCompleta = enviada ? await this.completa(enviada.id) : null;
+    const puedeDecidir = alcance.cotizar && POR_DECIDIR.includes(sol.estado);
 
     return {
       ...sol,
       archivos: archivos.rows,
       eventos: eventos.rows,
       borrador: borrador ? await this.completa(borrador.id) : null,
-      enviada: enviada ? await this.completa(enviada.id) : null,
+      enviada: enviadaCompleta,
       descartadas: await Promise.all(deEstado("DESCARTADA").map((c) => this.completa(c.id))),
       // Para que Compras vea cuánto le queda al área al cotizar
       presupuesto: await Presupuesto.saldoActual(sol.compras_area_id),
-      permisos: { cotizar: alcance.cotizar && sol.estado === "EN_COMPRAS" },
+      // Al decidir, cuánto descontaría cada opción cuando se autorice la orden
+      impacto: puedeDecidir && enviadaCompleta ? await Presupuesto.impacto(enviadaCompleta, sol.compras_area_id) : null,
+      permisos: { cotizar: alcance.cotizar && sol.estado === "EN_COMPRAS", decidir: puedeDecidir },
     };
   }
 
@@ -308,9 +331,9 @@ class CompraCotizacion {
     if (!alcance.cotizar) throw new AppError("No tienes permiso para cotizar", 403);
     if (sol.estado !== "EN_COMPRAS") {
       throw new AppError(
-        sol.estado === "COTIZADA"
-          ? "Ya se mandaron opciones; espera a que el solicitante elija o pida otras"
-          : "Esta solicitud ya tiene proveedor elegido",
+        POR_DECIDIR.includes(sol.estado)
+          ? "Ya se mandaron opciones; para cambiarlas, quien pidió tiene que pedir otras"
+          : "Esta solicitud ya tiene proveedor decidido",
         409,
       );
     }
@@ -500,8 +523,8 @@ class CompraCotizacion {
     }
   }
 
-  /** Bloquea la solicitud para el solicitante cuando tiene opciones por elegir. */
-  static async tomarParaElegir(cliente, solicitudId, usuario) {
+  /** Bloquea la solicitud para el solicitante mientras Compras no decide. */
+  static async tomarParaSugerir(cliente, solicitudId, usuario) {
     const { rows } = await cliente.query(
       `SELECT s.id, s.folio, s.estado, s.solicitante_id, s.compras_area_id, c.id AS cotizacion_id
          FROM compras_solicitudes s
@@ -511,63 +534,103 @@ class CompraCotizacion {
     );
     const sol = rows[0];
     if (!sol || sol.solicitante_id !== usuario.id) throw new AppError("La solicitud no existe", 404);
-    if (sol.estado !== "COTIZADA" || !sol.cotizacion_id) {
-      throw new AppError("Esta solicitud no tiene opciones esperando tu elección", 409);
+    if (!POR_DECIDIR.includes(sol.estado) || !sol.cotizacion_id) {
+      throw new AppError(
+        sol.estado === "DECIDIDA"
+          ? "Compras ya decidió la opción de esta solicitud"
+          : "Esta solicitud no tiene opciones esperando tu sugerencia",
+        409,
+      );
     }
     return sol;
   }
 
-  /** El solicitante elige una opción: queda registrado el monto. */
-  static async elegir(solicitudId, usuario, { opcionId, comentario }) {
+  /**
+   * El solicitante sugiere una opción con su opinión técnica. Mientras Compras
+   * no decide, la puede cambiar.
+   */
+  static async sugerir(solicitudId, usuario, { opcionId, comentario }) {
     const cliente = await db.pool.connect();
     try {
       await cliente.query("BEGIN");
-      const sol = await this.tomarParaElegir(cliente, solicitudId, usuario);
+      const sol = await this.tomarParaSugerir(cliente, solicitudId, usuario);
       const c = await this.completa(sol.cotizacion_id);
       const op = c.opciones.find((o) => o.id === Number(opcionId));
       if (!op) throw new AppError("Esa opción no es de esta cotización", 400);
-
-      // Lo que descuenta del presupuesto: sin IVA y en pesos, con el FIX de hoy si es en
-      // dólares. Se guarda tal cual; si luego cambia el tipo de cambio, lo ejercido no se mueve.
-      const [iva, tc, hoy] = await Promise.all([
-        Presupuesto.ivaTasa(cliente),
-        op.moneda === "USD" ? tipoCambio.ultimo() : null,
-        Presupuesto.hoyMexico(cliente),
-      ]);
-      const pres = Presupuesto.montoParaPresupuesto(
-        { total: op.total, moneda: op.moneda, incluyeIva: c.incluye_iva },
-        { tc: tc?.valor, iva },
-      );
-
+      const nota = texto(comentario, 1000);
       await cliente.query(
         `UPDATE compras_solicitudes
-            SET estado = 'ELEGIDA', opcion_elegida_id = $2, monto_elegido = $3, moneda_elegida = $4,
-                elegido_en = now(), elegido_por = $5,
-                monto_presupuesto = $6, tipo_cambio_presupuesto = $7, presupuesto_anio = $8, presupuesto_mes = $9
+            SET estado = 'SUGERIDA', opcion_sugerida_id = $2, sugerencia = $3, sugerido_en = now()
           WHERE id = $1`,
-        [solicitudId, op.id, op.total, op.moneda, usuario.id, pres.monto, pres.tipoCambio, hoy.anio, hoy.mes],
+        [solicitudId, op.id, nota],
       );
-      const nota = texto(comentario, 1000);
       await evento(cliente, {
         solicitudId,
-        tipo: "ELEGIDA",
+        tipo: "SUGERIDA",
         usuarioId: usuario.id,
-        detalle: `${op.proveedor} · ${dinero(op.total, op.moneda)}${c.incluye_iva ? " con IVA" : " + IVA"}${nota ? ` — ${nota}` : ""}`,
+        detalle: `${op.proveedor} · ${dinero(op.total, op.moneda)}${nota ? ` — ${nota}` : ""}`,
       });
       await cliente.query("COMMIT");
-      const saldo = await Presupuesto.saldo(sol.compras_area_id, hoy.anio, hoy.mes);
-      return {
-        id: solicitudId,
-        folio: sol.folio,
-        estado: "ELEGIDA",
-        proveedor: op.proveedor,
-        monto: op.total,
-        moneda: op.moneda,
-        montoPresupuesto: pres.monto,
-        saldo,
-        // Rebasar no bloquea, pero se le avisa al gerente
-        sobregiro: saldo.configurado && pres.monto != null && saldo.disponibleMes < 0,
-      };
+      return { id: solicitudId, folio: sol.folio, estado: "SUGERIDA", proveedor: op.proveedor, cambio: sol.estado === "SUGERIDA" };
+    } catch (e) {
+      await cliente.query("ROLLBACK");
+      throw e;
+    } finally {
+      cliente.release();
+    }
+  }
+
+  /**
+   * Compras decide la opción. Puede ser otra que la sugerida (diciendo por qué)
+   * o sin esperar la sugerencia. No descuenta presupuesto.
+   */
+  static async decidir(solicitudId, usuario, { opcionId, nota }) {
+    const alcance = await this.alcance(usuario);
+    const cliente = await db.pool.connect();
+    try {
+      await cliente.query("BEGIN");
+      const { rows } = await cliente.query(
+        `SELECT s.id, s.folio, s.estado, s.asignado_email, s.opcion_sugerida_id, c.id AS cotizacion_id
+           FROM compras_solicitudes s
+           LEFT JOIN compras_cotizaciones c ON c.solicitud_id = s.id AND c.estado = 'ENVIADA'
+          WHERE s.id = $1 FOR UPDATE OF s`,
+        [solicitudId],
+      );
+      const sol = rows[0];
+      if (!sol || !this.leToca(sol, alcance)) throw new AppError("La solicitud no existe", 404);
+      if (!alcance.cotizar) throw new AppError("No tienes permiso para decidir cotizaciones", 403);
+      if (!POR_DECIDIR.includes(sol.estado) || !sol.cotizacion_id) {
+        throw new AppError(
+          ["DECIDIDA", "ELEGIDA"].includes(sol.estado)
+            ? "Esta solicitud ya tiene proveedor decidido"
+            : "Esta solicitud no tiene opciones enviadas",
+          409,
+        );
+      }
+      const c = await this.completa(sol.cotizacion_id);
+      const op = c.opciones.find((o) => o.id === Number(opcionId));
+      if (!op) throw new AppError("Esa opción no es de esta cotización", 400);
+      const razon = texto(nota, 1000);
+      const otraQueLaSugerida = sol.opcion_sugerida_id && sol.opcion_sugerida_id !== op.id;
+      if (otraQueLaSugerida && !razon) {
+        throw new AppError("Escribe por qué decides otra opción que la que sugirió quien pidió", 400);
+      }
+      await cliente.query(
+        `UPDATE compras_solicitudes
+            SET estado = 'DECIDIDA', opcion_elegida_id = $2, monto_elegido = $3, moneda_elegida = $4,
+                elegido_en = now(), elegido_por = $5, decision_nota = $6
+          WHERE id = $1`,
+        [solicitudId, op.id, op.total, op.moneda, usuario.id, razon],
+      );
+      const como = !sol.opcion_sugerida_id ? " (sin esperar sugerencia)" : otraQueLaSugerida ? " (otra que la sugerida)" : "";
+      await evento(cliente, {
+        solicitudId,
+        tipo: "DECIDIDA",
+        usuarioId: usuario.id,
+        detalle: `${op.proveedor} · ${dinero(op.total, op.moneda)}${c.incluye_iva ? " con IVA" : " + IVA"}${como}${razon ? ` — ${razon}` : ""}`,
+      });
+      await cliente.query("COMMIT");
+      return { id: solicitudId, folio: sol.folio, estado: "DECIDIDA", proveedor: op.proveedor, monto: op.total, moneda: op.moneda };
     } catch (e) {
       await cliente.query("ROLLBACK");
       throw e;
@@ -583,12 +646,17 @@ class CompraCotizacion {
     const cliente = await db.pool.connect();
     try {
       await cliente.query("BEGIN");
-      const sol = await this.tomarParaElegir(cliente, solicitudId, usuario);
+      const sol = await this.tomarParaSugerir(cliente, solicitudId, usuario);
       await cliente.query(
         `UPDATE compras_cotizaciones SET estado = 'DESCARTADA', descartada_en = now(), motivo_descarte = $2 WHERE id = $1`,
         [sol.cotizacion_id, razon],
       );
-      await cliente.query(`UPDATE compras_solicitudes SET estado = 'EN_COMPRAS' WHERE id = $1`, [solicitudId]);
+      await cliente.query(
+        `UPDATE compras_solicitudes
+            SET estado = 'EN_COMPRAS', opcion_sugerida_id = NULL, sugerencia = NULL, sugerido_en = NULL
+          WHERE id = $1`,
+        [solicitudId],
+      );
       await evento(cliente, { solicitudId, tipo: "OTRAS_OPCIONES", usuarioId: usuario.id, detalle: razon });
       await cliente.query("COMMIT");
       return { id: solicitudId, folio: sol.folio, estado: "EN_COMPRAS" };

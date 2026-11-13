@@ -43,12 +43,14 @@ async function pendientes(usuario, rutas) {
       seguro(() => CompraSolicitud.contarPorElegir(usuario.id), 0),
     ]);
     agregar(porAprobar, porAprobar === 1 ? "solicitud de compra por aprobar" : "solicitudes de compra por aprobar", "/compras/solicitudes");
-    agregar(porElegir, porElegir === 1 ? "cotización por revisar" : "cotizaciones por revisar", "/compras/solicitudes");
+    agregar(porElegir, porElegir === 1 ? "cotización por dar tu sugerencia" : "cotizaciones por dar tu sugerencia", "/compras/solicitudes");
   }
   if (rutas.has("/compras/cotizaciones")) {
     const c = await seguro(() => CompraCotizacion.contar(usuario), {});
     const n = c?.["por-cotizar"] || 0;
     agregar(n, n === 1 ? "solicitud por cotizar" : "solicitudes por cotizar", "/compras/cotizaciones");
+    const d = c?.["por-decidir"] || 0;
+    agregar(d, d === 1 ? "cotización con sugerencia por decidir" : "cotizaciones con sugerencia por decidir", "/compras/cotizaciones?vista=por-decidir");
   }
   if (rutas.has("/compras/aprobadores")) {
     const sinTicket = await seguro(async () => (await CompraSolicitud.listarPorEnviar()).length, 0);

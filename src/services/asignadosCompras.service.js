@@ -35,8 +35,8 @@ async function actualizar() {
     `SELECT id, osticket_ticket_id, asignado_staff_id, osticket_estado
        FROM compras_solicitudes
       WHERE osticket_ticket_id IS NOT NULL
-        AND (estado IN ('EN_COMPRAS', 'COTIZADA')
-             OR (estado = 'ELEGIDA' AND elegido_en > now() - interval '30 days'))`,
+        AND (estado IN ('EN_COMPRAS', 'COTIZADA', 'SUGERIDA')
+             OR (estado IN ('DECIDIDA', 'ELEGIDA') AND elegido_en > now() - interval '30 days'))`,
   );
   let cambios = 0;
   for (let i = 0; i < rows.length; i += LOTE) {

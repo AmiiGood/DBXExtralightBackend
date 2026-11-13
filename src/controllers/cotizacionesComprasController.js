@@ -45,7 +45,7 @@ function mandarArchivo(req, res, archivo) {
 // =============================================
 
 /**
- * GET /api/compras/cotizaciones?vista=por-cotizar|esperando|elegidas
+ * GET /api/compras/cotizaciones?vista=por-cotizar|esperando|por-decidir|decididas
  *
  * Antes de responder lee de osTicket a quién está asignado cada ticket, si la
  * última lectura tiene más de un minuto. Si osTicket no responde, se usa lo
@@ -97,6 +97,14 @@ const postEnviar = catchAsync(async (req, res) => {
   sendSuccess(res, 200, r, `Opciones enviadas a quien pidió ${r.folio}`);
 });
 
+/** POST /api/compras/cotizaciones/:id/decidir   { opcionId, nota } */
+const postDecidir = catchAsync(async (req, res) => {
+  const r = await Cotizacion.decidir(idDe(req.params.id), req.usuario, req.body || {});
+  await log(req, "UPDATE", `Decidió ${r.proveedor} por ${r.monto} ${r.moneda} en ${r.folio}`, r.id);
+  avisos.enSegundoPlano(avisos.avisarDecidida, r.id);
+  sendSuccess(res, 200, r, `Decidiste a ${r.proveedor}. Ya se le avisó a quien pidió.`);
+});
+
 /** GET /api/compras/cotizaciones/:id/solicitud-archivos/:archivoId */
 const getArchivoSolicitud = catchAsync(async (req, res) => {
   mandarArchivo(
@@ -115,19 +123,12 @@ const getArchivoCotizacion = catchAsync(async (req, res) => {
 // LO QUE HACE QUIEN PIDIÓ
 // =============================================
 
-/** POST /api/compras/solicitudes/:id/elegir   { opcionId, comentario } */
-const postElegir = catchAsync(async (req, res) => {
-  const r = await Cotizacion.elegir(idDe(req.params.id), req.usuario, req.body || {});
-  await log(req, "UPDATE", `Eligió ${r.proveedor} por ${r.monto} ${r.moneda} en ${r.folio}`, r.id);
-  avisos.enSegundoPlano(avisos.avisarElegida, r.id);
-  if (r.sobregiro) avisos.enSegundoPlano(avisos.avisarSobregiro, r.id);
-  sendSuccess(
-    res,
-    200,
-    r,
-    `Elegiste a ${r.proveedor}. Compras ya fue avisado.` +
-      (r.sobregiro ? " El presupuesto de tu área quedó en negativo; se le avisó a tu gerente." : ""),
-  );
+/** POST /api/compras/solicitudes/:id/sugerir   { opcionId, comentario } */
+const postSugerir = catchAsync(async (req, res) => {
+  const r = await Cotizacion.sugerir(idDe(req.params.id), req.usuario, req.body || {});
+  await log(req, "UPDATE", `Sugirió ${r.proveedor} en ${r.folio}`, r.id);
+  avisos.enSegundoPlano(avisos.avisarSugerida, r.id);
+  sendSuccess(res, 200, r, `${r.cambio ? "Cambiaste tu sugerencia" : "Sugeriste"} a ${r.proveedor}. Compras ya fue avisado y decide.`);
 });
 
 /** POST /api/compras/solicitudes/:id/otras-opciones   { motivo } */
@@ -146,6 +147,7 @@ module.exports = {
   postEnviar,
   getArchivoSolicitud,
   getArchivoCotizacion,
-  postElegir,
+  postDecidir,
+  postSugerir,
   postOtrasOpciones,
 };

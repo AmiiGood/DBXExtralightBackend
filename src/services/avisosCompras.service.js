@@ -370,7 +370,7 @@ async function genteDeCompras(solicitudId) {
   return lista;
 }
 
-/** A quien pidió: Compras le mandó opciones para elegir. */
+/** A quien pidió: Compras le mandó opciones para que dé su sugerencia técnica. */
 async function avisarCotizada(id) {
   if (!(await avisosEncendidos())) return;
   const s = await datosSolicitud(id);
@@ -396,7 +396,7 @@ async function avisarCotizada(id) {
     tipo: "COTIZADA",
     solicitudId: id,
     usuario: solicitanteDe(s),
-    asunto: `Elige proveedor para tu solicitud ${s.folio} (${c.opciones.length} opciones)`,
+    asunto: `Da tu sugerencia técnica para ${s.folio} (${c.opciones.length} opciones)`,
     html: plantilla({
       titulo: "Compras te mandó opciones de proveedores",
       subtitulo: `${escapar(s.folio)} · ${escapar(s.asunto)} · ticket ${escapar(s.osticket_numero)}`,
@@ -416,50 +416,98 @@ async function avisarCotizada(id) {
           </thead>
           <tbody>${filas}</tbody>
         </table>
-        <p style="font-size:14px;color:#6b7280">En el DBX ves el detalle por partida y las fotos. Hasta que elijas,
-          Compras no puede seguir.</p>`,
-      boton: { texto: "Ver y elegir", url: enlace({ id }) },
+        <p style="font-size:14px;color:#6b7280">En el DBX ves el detalle por partida y las fotos. Sugiere la que
+          técnicamente te sirve y por qué: Compras toma en cuenta tu sugerencia y decide. Si ninguna te sirve,
+          pide otras.</p>`,
+      boton: { texto: "Ver y sugerir", url: enlace({ id }) },
     }),
-    texto: `Compras te mandó ${c.opciones.length} opciones para ${s.folio}. Elige en ${enlace({ id })}`,
+    texto: `Compras te mandó ${c.opciones.length} opciones para ${s.folio}. Da tu sugerencia en ${enlace({ id })}`,
   });
 }
 
-/** A Compras: el solicitante eligió proveedor. */
-async function avisarElegida(id) {
+/** A Compras: quien pidió sugirió una opción; ahora le toca decidir. */
+async function avisarSugerida(id) {
   if (!(await avisosEncendidos())) return;
   const s = await datosSolicitud(id);
-  if (s.estado !== "ELEGIDA") return;
+  if (s.estado !== "SUGERIDA") return;
   const { rows } = await db.query(
-    `SELECT o.proveedor, s.monto_elegido::float AS monto, s.moneda_elegida AS moneda, c.incluye_iva,
-            (SELECT e.detalle FROM compras_solicitud_eventos e
-              WHERE e.solicitud_id = s.id AND e.tipo = 'ELEGIDA' ORDER BY e.id DESC LIMIT 1) AS detalle
-       FROM compras_solicitudes s
-       JOIN compras_cotizacion_opciones o ON o.id = s.opcion_elegida_id
+    `SELECT o.proveedor, c.incluye_iva, sol.sugerencia,
+            (SELECT count(*)::int FROM compras_cotizacion_opciones x WHERE x.cotizacion_id = c.id) AS opciones
+       FROM compras_solicitudes sol
+       JOIN compras_cotizacion_opciones o ON o.id = sol.opcion_sugerida_id
        JOIN compras_cotizaciones c ON c.id = o.cotizacion_id
-      WHERE s.id = $1`,
+      WHERE sol.id = $1`,
     [id],
   );
   const e = rows[0];
   if (!e) return;
-  const comentario = (e.detalle || "").split(" — ").slice(1).join(" — ");
+  const { cotizacion } = await require("../models/CompraCotizacion").paraSolicitante(id);
+  const op = cotizacion?.opciones.find((o) => o.proveedor === e.proveedor);
   for (const u of await genteDeCompras(id)) {
     await mandar({
-      tipo: "ELEGIDA",
+      tipo: "SUGERIDA",
       solicitudId: id,
       usuario: u,
-      asunto: `${s.folio} (${s.osticket_numero}): eligió ${e.proveedor} por ${dinero(e.monto, e.moneda)}`,
+      asunto: `${s.folio} (${s.osticket_numero}): sugiere ${e.proveedor}; falta que decidas`,
       html: plantilla({
-        titulo: "Ya eligieron proveedor",
+        titulo: "Ya hay sugerencia técnica: te toca decidir",
         subtitulo: `${escapar(s.folio)} · ticket ${escapar(s.osticket_numero)} · ${escapar(s.asunto)}`,
         cuerpo: `
-          <p><b>${escapar(s.solicitante)}</b> (${escapar(s.area)}) eligió a <b>${escapar(e.proveedor)}</b>
-             por <b>${dinero(e.monto, e.moneda)}</b> ${e.incluye_iva ? "con IVA" : "+ IVA"}.</p>
-          ${comentario ? `<p>Comentó: “${parrafos(comentario)}”</p>` : ""}`,
-        boton: { texto: "Ver la solicitud", url: enlaceCotizaciones({ vista: "elegidas", id }) },
+          <p><b>${escapar(s.solicitante)}</b> (${escapar(s.area)}) sugiere a <b>${escapar(e.proveedor)}</b>${
+            op ? ` por <b>${dinero(op.total, op.moneda)}</b> ${e.incluye_iva ? "con IVA" : "+ IVA"}` : ""
+          } de las ${e.opciones} opciones que mandaste.</p>
+          ${e.sugerencia ? `<p>Su opinión técnica: “${parrafos(e.sugerencia)}”</p>` : ""}
+          <p style="font-size:14px;color:#6b7280">La decisión es de Compras. Si decides otra opción, el DBX te pide
+            decir por qué y se lo hace saber.</p>`,
+        boton: { texto: "Decidir", url: enlaceCotizaciones({ vista: "por-decidir", id }) },
       }),
-      texto: `${s.solicitante} eligió ${e.proveedor} por ${dinero(e.monto, e.moneda)} en ${s.folio}.`,
+      texto: `${s.solicitante} sugiere ${e.proveedor} para ${s.folio}. Decide en ${enlaceCotizaciones({ vista: "por-decidir", id })}`,
     });
   }
+}
+
+/** A quien pidió: Compras decidió la opción. */
+async function avisarDecidida(id) {
+  if (!(await avisosEncendidos())) return;
+  const s = await datosSolicitud(id);
+  if (s.estado !== "DECIDIDA") return;
+  const { rows } = await db.query(
+    `SELECT o.proveedor, sol.monto_elegido::float AS monto, sol.moneda_elegida AS moneda, c.incluye_iva,
+            sol.decision_nota, os.proveedor AS sugerido, u.nombre_completo AS decidio
+       FROM compras_solicitudes sol
+       JOIN compras_cotizacion_opciones o ON o.id = sol.opcion_elegida_id
+       JOIN compras_cotizaciones c ON c.id = o.cotizacion_id
+       LEFT JOIN compras_cotizacion_opciones os ON os.id = sol.opcion_sugerida_id
+       LEFT JOIN usuarios u ON u.id = sol.elegido_por
+      WHERE sol.id = $1`,
+    [id],
+  );
+  const e = rows[0];
+  if (!e) return;
+  const otra = e.sugerido && e.sugerido !== e.proveedor;
+  await mandar({
+    tipo: "DECIDIDA",
+    solicitudId: id,
+    usuario: solicitanteDe(s),
+    asunto: `${s.folio}: Compras decidió ${e.proveedor} por ${dinero(e.monto, e.moneda)}`,
+    html: plantilla({
+      titulo: "Compras ya decidió la opción",
+      subtitulo: `${escapar(s.folio)} · ticket ${escapar(s.osticket_numero)} · ${escapar(s.asunto)}`,
+      cuerpo: `
+        <p><b>${escapar(e.decidio || "Compras")}</b> decidió a <b>${escapar(e.proveedor)}</b> por
+           <b>${dinero(e.monto, e.moneda)}</b> ${e.incluye_iva ? "con IVA" : "+ IVA"}.</p>
+        ${
+          otra
+            ? `<p>Tú habías sugerido a ${escapar(e.sugerido)}.${e.decision_nota ? ` Compras explicó: “${parrafos(e.decision_nota)}”` : ""}</p>`
+            : e.decision_nota
+              ? `<p>Comentó: “${parrafos(e.decision_nota)}”</p>`
+              : ""
+        }
+        <p style="font-size:14px;color:#6b7280">Lo siguiente es la orden de compra, sobre el mismo ticket.</p>`,
+      boton: { texto: "Ver la solicitud", url: enlace({ id }) },
+    }),
+    texto: `Compras decidió ${e.proveedor} por ${dinero(e.monto, e.moneda)} en ${s.folio}.`,
+  });
 }
 
 /**
@@ -708,7 +756,8 @@ module.exports = {
   avisarAprobada,
   avisarEnCompras,
   avisarCotizada,
-  avisarElegida,
+  avisarSugerida,
+  avisarDecidida,
   avisarOtrasOpciones,
   avisarSobregiro,
   mandarRecordatorios,

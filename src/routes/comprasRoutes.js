@@ -196,13 +196,13 @@ router.put(
 // =============================================
 // COTIZACIONES
 //
-// Compras captura las opciones de proveedores y las manda; quien pidió elige.
-// Elegir y pedir otras opciones solo piden abrir Solicitudes: que sea quien
-// pidió lo revisa el modelo.
+// Compras captura las opciones de proveedores y las manda; quien pidió sugiere
+// una con su opinión técnica y Compras decide. Sugerir y pedir otras opciones
+// solo piden abrir Solicitudes: que sea quien pidió lo revisa el modelo.
 // =============================================
 
 /**
- * @route   GET /api/compras/cotizaciones?vista=por-cotizar|esperando|elegidas
+ * @route   GET /api/compras/cotizaciones?vista=por-cotizar|esperando|por-decidir|decididas
  * @desc    Lo que el agente tiene asignado en osTicket (o todo, para el jefe)
  */
 router.get("/cotizaciones", authenticate, puedeLeer(MODULO_COTIZACIONES), cotizaciones.getBandeja);
@@ -238,6 +238,12 @@ router.post(
 router.post("/cotizaciones/:id/enviar", authenticate, puedeCrear(MODULO_COTIZACIONES), cotizaciones.postEnviar);
 
 /**
+ * @route   POST /api/compras/cotizaciones/:id/decidir
+ * @desc    Compras decide la opción (pide poder cotizar)
+ */
+router.post("/cotizaciones/:id/decidir", authenticate, puedeCrear(MODULO_COTIZACIONES), cotizaciones.postDecidir);
+
+/**
  * @route   GET /api/compras/cotizaciones/:id/solicitud-archivos/:archivoId
  * @desc    Un adjunto de la solicitud, visto desde Compras
  */
@@ -256,10 +262,10 @@ router.get(
 router.get("/cotizacion-archivos/:archivoId", authenticate, cotizaciones.getArchivoCotizacion);
 
 /**
- * @route   POST /api/compras/solicitudes/:id/elegir
- * @desc    Quien pidió elige una opción
+ * @route   POST /api/compras/solicitudes/:id/sugerir
+ * @desc    Quien pidió sugiere una opción con su opinión técnica
  */
-router.post("/solicitudes/:id/elegir", authenticate, puedeLeer(MODULO), cotizaciones.postElegir);
+router.post("/solicitudes/:id/sugerir", authenticate, puedeLeer(MODULO), cotizaciones.postSugerir);
 
 /**
  * @route   POST /api/compras/solicitudes/:id/otras-opciones

@@ -14,7 +14,9 @@ const { AppError } = require("../utils/errorHandler");
  *   - Si quien pide es el suplente, la tiene que aprobar el gerente.
  */
 
-const ESTADOS = ["PENDIENTE", "APROBADA", "RECHAZADA", "CANCELADA", "EN_COMPRAS", "COTIZADA", "ELEGIDA"];
+const ESTADOS = [
+  "PENDIENTE", "APROBADA", "RECHAZADA", "CANCELADA", "EN_COMPRAS", "COTIZADA", "SUGERIDA", "DECIDIDA", "ELEGIDA",
+];
 
 // Fechas como texto en hora de planta: la conexión ya trae la zona de México y
 // así no las mueve el JSON del navegador.
@@ -33,6 +35,11 @@ const SELECT_SOLICITUD = `
          s.monto_presupuesto::float AS monto_presupuesto,
          s.moneda_elegida,
          ${F("s.elegido_en")}  AS elegido_en,
+         s.opcion_sugerida_id,
+         s.sugerencia,
+         ${F("s.sugerido_en")} AS sugerido_en,
+         s.decision_nota,
+         ue.nombre_completo    AS elegido_por_nombre,
          s.intentos_envio,
          s.ultimo_error_envio,
          s.compras_area_id,
@@ -47,6 +54,7 @@ const SELECT_SOLICITUD = `
     JOIN compras_areas ca ON ca.id = s.compras_area_id
     JOIN usuarios us      ON us.id = s.solicitante_id
     LEFT JOIN usuarios ud ON ud.id = s.decidido_por
+    LEFT JOIN usuarios ue ON ue.id = s.elegido_por
 `;
 
 /** Qué papel tiene un usuario frente a una solicitud. */
@@ -270,11 +278,11 @@ class CompraSolicitud {
 
     // Las opciones de Compras, una vez enviadas. Se requiere aquí y no arriba
     // para no cargar el modelo de cotizaciones en cada consulta de la bandeja.
-    const { cotizacion, descartadas, impacto } = ["COTIZADA", "ELEGIDA"].includes(sol.estado)
+    const { cotizacion, descartadas, impacto } = ["COTIZADA", "SUGERIDA", "DECIDIDA", "ELEGIDA"].includes(sol.estado)
       ? await require("./CompraCotizacion").paraSolicitante(id)
       : { cotizacion: null, descartadas: 0, impacto: null };
 
-    // Cuánto le queda al área: el gerente lo ve al aprobar y quien pide al elegir
+    // Cuánto le queda al área: el gerente lo ve al aprobar y quien pide al sugerir
     const presupuesto =
       impacto?.saldo ||
       (["PENDIENTE", "APROBADA", "EN_COMPRAS"].includes(sol.estado)
@@ -292,13 +300,14 @@ class CompraSolicitud {
       permisos: {
         decidir: p.puedeDecidir && sol.estado === "PENDIENTE",
         cancelar: p.esSolicitante && sol.estado === "PENDIENTE",
-        // Solo quien pidió elige; su gerente puede ver las opciones
-        elegir: p.esSolicitante && sol.estado === "COTIZADA",
+        // Solo quien pidió sugiere (y la cambia mientras Compras no decide); su
+        // gerente puede ver las opciones
+        sugerir: p.esSolicitante && ["COTIZADA", "SUGERIDA"].includes(sol.estado),
       },
     };
   }
 
-  /** Cuántas de sus solicitudes esperan que el usuario elija proveedor. */
+  /** Cuántas de sus solicitudes esperan la sugerencia técnica del usuario. */
   static async contarPorElegir(usuarioId) {
     const { rows } = await db.query(
       `SELECT count(*)::int AS n FROM compras_solicitudes WHERE solicitante_id = $1 AND estado = 'COTIZADA'`,
