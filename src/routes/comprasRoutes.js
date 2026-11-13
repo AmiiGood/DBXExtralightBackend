@@ -306,6 +306,12 @@ router.get("/ordenes", authenticate, ordenes.getOrdenes);
 router.get("/ordenes/:id", authenticate, ordenes.getOrden);
 
 /**
+ * @route   GET /api/compras/ordenes/:id/pdf
+ * @desc    El formato de autorización con las firmas estampadas
+ */
+router.get("/ordenes/:id/pdf", authenticate, ordenes.getPdf);
+
+/**
  * @route   POST /api/compras/ordenes/:id/firmar
  * @desc    Firma con el PIN el paso que le toca (Compras pone el tipo; Finanzas la cuenta y el CC)
  */
@@ -347,8 +353,8 @@ router.put("/presupuestos/:anio", authenticate, puedeEditar(MODULO_PRESUPUESTOS)
 // =============================================
 // FORMATOS EN PAPEL
 //
-// Captura del formato de autorización y registro mientras el flujo con firmas
-// no está en el sistema. Corregir pide crear: el controlador deja a quien
+// Captura del formato de autorización y registro en papel (las órdenes firmadas
+// en el DBX entran solas al autorizarse y no se corrigen aquí). Corregir pide crear: el controlador deja a quien
 // capturó corregir los suyos y, con editar, los de todos.
 // =============================================
 

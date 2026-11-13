@@ -1,5 +1,6 @@
 const Orden = require("../models/CompraOrden");
 const avisos = require("../services/avisosCompras.service");
+const pdfOrden = require("../services/pdfOrdenCompra.service");
 const { catchAsync, sendSuccess, AppError } = require("../utils/errorHandler");
 const { registrarLog, obtenerIP, obtenerUserAgent } = require("../utils/logger");
 
@@ -39,6 +40,23 @@ const getOrdenes = catchAsync(async (req, res) => {
 /** GET /api/compras/ordenes/:id */
 const getOrden = catchAsync(async (req, res) => {
   sendSuccess(res, 200, await Orden.obtener(idDe(req.params.id), req.usuario));
+});
+
+/**
+ * GET /api/compras/ordenes/:id/pdf
+ * El formato de autorización con las firmas estampadas. ?descargar=1 lo baja como archivo.
+ */
+const getPdf = catchAsync(async (req, res) => {
+  const o = await Orden.obtener(idDe(req.params.id), req.usuario);
+  const pdf = await pdfOrden.generar(o);
+  const nombre = `Orden de compra ${o.osticket_numero || o.folio}.pdf`;
+  res.setHeader("Content-Type", "application/pdf");
+  res.setHeader(
+    "Content-Disposition",
+    `${req.query.descargar ? "attachment" : "inline"}; filename*=UTF-8''${encodeURIComponent(nombre)}`,
+  );
+  res.setHeader("Cross-Origin-Resource-Policy", "cross-origin");
+  res.send(pdf);
 });
 
 /** POST /api/compras/solicitudes/:id/orden   { comentario, pin? } */
@@ -89,4 +107,4 @@ const putFirmantes = catchAsync(async (req, res) => {
   sendSuccess(res, 200, r, "Firmantes guardados");
 });
 
-module.exports = { getOrdenes, getOrden, postEnviar, postFirmar, postRechazar, getFirmantes, putFirmantes };
+module.exports = { getOrdenes, getOrden, getPdf, postEnviar, postFirmar, postRechazar, getFirmantes, putFirmantes };

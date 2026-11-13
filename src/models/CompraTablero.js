@@ -3,9 +3,9 @@ const db = require("../config/database");
 /**
  * Datos del Tablero de Compras (para Dirección).
  *
- * Mientras se usa el formato en papel, el gasto autorizado son los formatos
- * capturados (compras_formatos). Cuando el flujo con firmas esté en el
- * sistema, aquí se cambia la fuente y la pantalla queda igual.
+ * El gasto autorizado son los formatos (compras_formatos): los de papel que se
+ * capturan y las órdenes firmadas en el DBX, que entran solas al autorizarse
+ * (migración 14). Las órdenes que esperan a Dirección se cuentan aparte.
  *
  * Todo sale en pesos y en dólares. Los dólares de un formato en pesos (y los
  * pesos de uno en dólares) usan el FIX de Banxico del día del formato o el
@@ -27,7 +27,7 @@ class CompraTablero {
    * @param {String} hasta  YYYY-MM-DD
    */
   static async datos(desde, hasta) {
-    const [formatos, presupuesto, areas, tc, grupos] = await Promise.all([
+    const [formatos, presupuesto, areas, tc, grupos, ordenesDireccion] = await Promise.all([
       db.query(
         `SELECT f.id, to_char(f.fecha, 'YYYY-MM-DD') AS fecha, f.ticket,
                 f.compras_area_id AS area_id, ca.nombre AS area_nombre,
@@ -79,6 +79,14 @@ class CompraTablero {
            JOIN compras_cuentas c ON c.codigo = g.codigo
           ORDER BY g.grupo_orden, g.grupo, g.codigo`,
       ),
+      // Órdenes del DBX que ya firmaron gerente, Compras y Finanzas y esperan a
+      // Dirección. Todavía no son formato: entran al quedar autorizadas
+      db.query(
+        `SELECT o.id, s.compras_area_id AS area_id
+           FROM compras_ordenes o JOIN compras_solicitudes s ON s.id = o.solicitud_id
+          WHERE o.estado = 'EN_FIRMAS' AND o.paso = 'DIRECCION' AND o.enviada_en::date BETWEEN $1 AND $2`,
+        [desde, hasta],
+      ),
     ]);
 
     return {
@@ -89,6 +97,7 @@ class CompraTablero {
       presupuesto: presupuesto.rows,
       areas: areas.rows,
       gruposCuenta: grupos.rows,
+      ordenesDireccion: ordenesDireccion.rows,
     };
   }
 }

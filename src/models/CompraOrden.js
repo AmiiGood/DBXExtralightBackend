@@ -53,6 +53,13 @@ async function verTodas(usuario) {
   return rolId ? RolModulo.verificarPermiso(rolId, MODULO, "puede_editar") : false;
 }
 
+/** Quien ve el reporte de Formatos también abre el PDF de las órdenes que se volvieron formato. */
+async function leeFormatos(usuario) {
+  if (esAdmin(usuario)) return true;
+  const rolId = usuario.rol?.id || usuario.rolId;
+  return rolId ? RolModulo.verificarPermiso(rolId, "/compras/formatos", "puede_leer") : false;
+}
+
 async function evento(cliente, { solicitudId, tipo, usuarioId, como = null, detalle = null }) {
   await cliente.query(
     `INSERT INTO compras_solicitud_eventos (solicitud_id, tipo, usuario_id, como, detalle) VALUES ($1, $2, $3, $4, $5)`,
@@ -354,7 +361,8 @@ class CompraOrden {
       [o.solicitante_id, o.gerente_id, o.suplente_id].includes(usuario.id) ||
       papeles.size > 0 ||
       firmo.length > 0 ||
-      (await verTodas(usuario));
+      (await verTodas(usuario)) ||
+      (o.estado === "AUTORIZADA" && (await leeFormatos(usuario)));
     if (!puedeVer) throw new AppError("La orden no existe", 404);
 
     const turno = puedeFirmar(usuario, o, papeles);
@@ -388,8 +396,11 @@ class CompraOrden {
       presupuesto = { saldo, monto: o.monto_presupuesto, descontado: true };
     }
 
-    const { rows: cfg } = await db.query("SELECT oc_monto_minimo_direccion::float AS minimo FROM compras_config WHERE id = 1");
+    const { rows: cfg } = await db.query(
+      `SELECT oc_monto_minimo_direccion::float AS minimo, ${F("now()")} AS ahora FROM compras_config WHERE id = 1`,
+    );
     return {
+      generado_en: cfg[0]?.ahora,
       ...o,
       firmas,
       cotizacion,
@@ -563,6 +574,8 @@ class CompraOrden {
           ? "Sin tipo de cambio: no se descontó del presupuesto"
           : `Se descontaron ${dinero(monto, "MXN")} del presupuesto (sin IVA)`,
     });
+    // Queda registrada en Formatos (y así en el Tablero), como el formato en papel
+    await cliente.query("SELECT compras_formato_de_orden($1)", [o.id]);
   }
 
   /** Cualquier rechazo termina la orden y la solicitud. */

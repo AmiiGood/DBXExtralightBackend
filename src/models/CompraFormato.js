@@ -5,8 +5,9 @@ const Catalogo = require("./CompraCatalogo");
 /**
  * Formatos de autorización y registro de compras (los de papel).
  *
- * Ver migrations/2026-11-10_compras_solicitudes_07_formatos.sql. Se capturan
- * mientras el flujo con firmas no está en el sistema; quien firmó va como texto.
+ * Ver migrations/2026-11-10_compras_solicitudes_07_formatos.sql. Los de papel se
+ * capturan aquí; quien firmó va como texto. Las órdenes firmadas en el DBX entran
+ * solas al autorizarse (migración 14, orden_id) y no se corrigen ni se borran.
  * Los montos en dólares se pasan a pesos con el FIX de Banxico del día del
  * formato (o el último publicado antes), solo para sumar en el reporte.
  *
@@ -51,7 +52,7 @@ const SELECT = `
          f.requerimiento, f.monto::float AS monto, f.moneda,
          f.autorizo_gerente, f.clasif_tipo, f.autorizo_compras,
          f.cuenta, cc.nombre AS cuenta_nombre, f.centro_costos, f.autorizo_finanzas, f.autorizo_direccion,
-         f.observaciones,
+         f.observaciones, f.orden_id,
          f.capturado_por, cu.nombre_completo AS capturado_por_nombre,
          to_char(f.capturado_en, 'YYYY-MM-DD HH24:MI') AS capturado_en,
          au.nombre_completo AS actualizado_por_nombre,
@@ -167,6 +168,7 @@ class CompraFormato {
 
   static async actualizar(id, body, usuarioId) {
     const anterior = await CompraFormato.obtener(id);
+    if (anterior.orden_id) throw CompraFormato.firmado();
     const d = await Catalogo.validarFormato(CompraFormato.normalizar(body), anterior);
     const cols = Object.keys(d);
     try {
@@ -185,9 +187,16 @@ class CompraFormato {
   }
 
   static async eliminar(id) {
+    const anterior = await CompraFormato.obtener(id);
+    if (anterior.orden_id) throw CompraFormato.firmado();
     const { rows } = await db.query("DELETE FROM compras_formatos WHERE id = $1 RETURNING ticket", [id]);
     if (!rows[0]) throw new AppError("No existe ese formato", 404);
     return rows[0];
+  }
+
+  /** Los que vienen de una orden firmada en el DBX no se corrigen ni se borran. */
+  static firmado() {
+    return new AppError("Este formato viene de una orden de compra firmada en el DBX: lo firmado no se corrige aquí", 409);
   }
 
   static traducirError(e, d) {
