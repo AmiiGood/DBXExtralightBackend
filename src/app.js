@@ -68,6 +68,7 @@ app.use("/api/aims", require("./routes/aimsRoutes"));
 app.use("/api/checadas", require("./routes/checadasRoutes"));
 app.use("/api/gasto-q4", require("./routes/gastoQ4Routes"));
 app.use("/api/inicio", require("./routes/inicioRoutes"));
+app.use("/api/firmas", require("./routes/firmasRoutes"));
 
 app.use(notFound);
 app.use(errorHandler);
