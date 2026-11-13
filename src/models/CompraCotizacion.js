@@ -37,7 +37,7 @@ const VISTAS = {
   "por-cotizar": { estados: ["EN_COMPRAS"], orden: "s.enviado_en ASC" },
   esperando: { estados: ["COTIZADA"], orden: "c.enviada_en ASC" },
   "por-decidir": { estados: ["SUGERIDA"], orden: "s.sugerido_en ASC" },
-  decididas: { estados: ["DECIDIDA", "ELEGIDA"], orden: "s.elegido_en DESC" },
+  decididas: { estados: ["DECIDIDA", "ELEGIDA", "EN_FIRMAS", "AUTORIZADA", "NO_AUTORIZADA"], orden: "s.elegido_en DESC" },
 };
 // Los correos viejos traen ?vista=elegidas
 VISTAS.elegidas = VISTAS.decididas;
@@ -275,7 +275,7 @@ class CompraCotizacion {
          JOIN usuarios us ON us.id = s.solicitante_id
          LEFT JOIN usuarios ud ON ud.id = s.decidido_por
          LEFT JOIN usuarios ue ON ue.id = s.elegido_por
-        WHERE s.id = $1 AND s.estado IN ('EN_COMPRAS', 'COTIZADA', 'SUGERIDA', 'DECIDIDA', 'ELEGIDA')`,
+        WHERE s.id = $1 AND s.estado IN ('EN_COMPRAS', 'COTIZADA', 'SUGERIDA', 'DECIDIDA', 'ELEGIDA', 'EN_FIRMAS', 'AUTORIZADA', 'NO_AUTORIZADA')`,
       [solicitudId],
     );
     const sol = rows[0];
@@ -601,7 +601,7 @@ class CompraCotizacion {
       if (!alcance.cotizar) throw new AppError("No tienes permiso para decidir cotizaciones", 403);
       if (!POR_DECIDIR.includes(sol.estado) || !sol.cotizacion_id) {
         throw new AppError(
-          ["DECIDIDA", "ELEGIDA"].includes(sol.estado)
+          ["DECIDIDA", "ELEGIDA", "EN_FIRMAS", "AUTORIZADA", "NO_AUTORIZADA"].includes(sol.estado)
             ? "Esta solicitud ya tiene proveedor decidido"
             : "Esta solicitud no tiene opciones enviadas",
           409,

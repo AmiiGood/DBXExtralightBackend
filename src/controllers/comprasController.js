@@ -49,9 +49,10 @@ const getContexto = catchAsync(async (req, res) => {
     // A este correo le contesta Compras: si osTicket no lo conoce, se avisa
     envio.correoEnOsticket(req.usuario.email),
   ]);
-  const [pendientes, porElegir] = await Promise.all([
+  const [pendientes, porElegir, porEnviarOrden] = await Promise.all([
     aprueba.length ? Solicitud.contarPendientes(req.usuario.id) : 0,
     Solicitud.contarPorElegir(req.usuario.id),
+    Solicitud.contarPorEnviarOrden(req.usuario.id),
   ]);
 
   sendSuccess(res, 200, {
@@ -60,6 +61,7 @@ const getContexto = catchAsync(async (req, res) => {
     aprueba,
     pendientes,
     porElegir,
+    porEnviarOrden,
     correo: req.usuario.email,
     correoEnOsticket,
     conexionOsticket: envio.configurado(),

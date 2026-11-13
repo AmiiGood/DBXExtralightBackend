@@ -10,8 +10,9 @@ const { AppError } = require("../utils/errorHandler");
  *   - Un monto por área, año y mes; el anual es la suma.
  *   - Lo que no se gasta pasa al mes siguiente dentro del año:
  *       disponible del mes = presupuesto de enero a ese mes − ejercido de enero a ese mes
- *   - Lo ejercido son las solicitudes ELEGIDAS, por el monto que se guardó al
- *     elegir (sin IVA y en pesos), en el mes en que se eligieron.
+ *   - Lo ejercido son las solicitudes ELEGIDAS (las de antes del 13-nov-2026,
+ *     al elegir) y las AUTORIZADAS (al quedar autorizada la orden de compra),
+ *     por el monto que se guardó entonces (sin IVA y en pesos), en ese mes.
  *   - Rebasar no bloquea: el disponible queda en negativo.
  */
 
@@ -70,7 +71,7 @@ class CompraPresupuesto {
          SELECT presupuesto_mes AS mes, sum(monto_presupuesto) AS monto,
                 count(*) FILTER (WHERE monto_presupuesto IS NULL) AS sin_tc
            FROM compras_solicitudes
-          WHERE compras_area_id = $1 AND presupuesto_anio = $2 AND estado = 'ELEGIDA'
+          WHERE compras_area_id = $1 AND presupuesto_anio = $2 AND estado IN ('ELEGIDA', 'AUTORIZADA')
           GROUP BY presupuesto_mes
        )
        SELECT coalesce((SELECT sum(monto) FROM p WHERE mes = $3), 0)::float AS presupuesto_mes,
@@ -149,7 +150,7 @@ class CompraPresupuesto {
         `SELECT compras_area_id, presupuesto_mes AS mes, sum(monto_presupuesto)::float AS monto,
                 count(*)::int AS elecciones, count(*) FILTER (WHERE monto_presupuesto IS NULL)::int AS sin_tc
            FROM compras_solicitudes
-          WHERE presupuesto_anio = $1 AND estado = 'ELEGIDA'
+          WHERE presupuesto_anio = $1 AND estado IN ('ELEGIDA', 'AUTORIZADA')
           GROUP BY compras_area_id, presupuesto_mes`,
         [anio],
       ),
@@ -185,15 +186,17 @@ class CompraPresupuesto {
   static async elecciones(areaId, anio) {
     const { rows } = await db.query(
       `SELECT s.id, s.folio, s.asunto, s.osticket_numero, s.presupuesto_mes AS mes,
-              to_char(s.elegido_en, 'YYYY-MM-DD"T"HH24:MI:SS') AS elegido_en,
+              to_char(coalesce(oc.terminada_en, s.elegido_en), 'YYYY-MM-DD"T"HH24:MI:SS') AS elegido_en,
+              s.estado,
               s.monto_elegido::float AS monto_elegido, s.moneda_elegida,
               s.monto_presupuesto::float AS monto_presupuesto, s.tipo_cambio_presupuesto::float AS tipo_cambio,
               o.proveedor, us.nombre_completo AS solicitante_nombre
          FROM compras_solicitudes s
          JOIN usuarios us ON us.id = s.solicitante_id
          LEFT JOIN compras_cotizacion_opciones o ON o.id = s.opcion_elegida_id
-        WHERE s.compras_area_id = $1 AND s.presupuesto_anio = $2 AND s.estado = 'ELEGIDA'
-        ORDER BY s.elegido_en DESC`,
+         LEFT JOIN compras_ordenes oc ON oc.solicitud_id = s.id
+        WHERE s.compras_area_id = $1 AND s.presupuesto_anio = $2 AND s.estado IN ('ELEGIDA', 'AUTORIZADA')
+        ORDER BY coalesce(oc.terminada_en, s.elegido_en) DESC`,
       [areaId, anio],
     );
     return rows;

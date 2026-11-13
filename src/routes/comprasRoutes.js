@@ -6,6 +6,7 @@ const presupuestos = require("../controllers/presupuestosComprasController");
 const { authenticate } = require("../middlewares/auth");
 const formatos = require("../controllers/formatosComprasController");
 const tablero = require("../controllers/tableroComprasController");
+const ordenes = require("../controllers/ordenesComprasController");
 const { puedeLeer, puedeCrear, puedeEditar, puedeEliminar } = require("../middlewares/permisos");
 const { recibirArchivos } = require("../services/comprasArchivos.service");
 
@@ -272,6 +273,49 @@ router.post("/solicitudes/:id/sugerir", authenticate, puedeLeer(MODULO), cotizac
  * @desc    Ninguna opción le sirve: regresa a Compras
  */
 router.post("/solicitudes/:id/otras-opciones", authenticate, puedeLeer(MODULO), cotizaciones.postOtrasOpciones);
+
+// =============================================
+// ORDEN DE COMPRA
+//
+// Quién firma sale de los datos (gerente del área y la lista de firmantes),
+// no del rol: por eso firmar solo pide sesión. El modelo revisa a quién le toca.
+// =============================================
+
+/**
+ * @route   POST /api/compras/solicitudes/:id/orden
+ * @desc    Quien pidió envía la orden de compra de lo que decidió Compras
+ */
+router.post("/solicitudes/:id/orden", authenticate, puedeLeer(MODULO), ordenes.postEnviar);
+
+/**
+ * @route   GET|PUT /api/compras/ordenes/firmantes
+ * @desc    Quiénes firman por Compras, Finanzas y Dirección, y el monto mínimo
+ *          para Dirección. Se configura con los aprobadores.
+ */
+router.get("/ordenes/firmantes", authenticate, puedeLeer(MODULO_APROBADORES), ordenes.getFirmantes);
+router.put("/ordenes/firmantes", authenticate, puedeEditar(MODULO_APROBADORES), ordenes.putFirmantes);
+
+/**
+ * @route   GET /api/compras/ordenes?vista=por-firmar|firmadas|todas
+ */
+router.get("/ordenes", authenticate, ordenes.getOrdenes);
+
+/**
+ * @route   GET /api/compras/ordenes/:id
+ */
+router.get("/ordenes/:id", authenticate, ordenes.getOrden);
+
+/**
+ * @route   POST /api/compras/ordenes/:id/firmar
+ * @desc    Firma con el PIN el paso que le toca (Compras pone el tipo; Finanzas la cuenta y el CC)
+ */
+router.post("/ordenes/:id/firmar", authenticate, ordenes.postFirmar);
+
+/**
+ * @route   POST /api/compras/ordenes/:id/rechazar
+ * @desc    Rechaza con motivo: la orden y la solicitud terminan
+ */
+router.post("/ordenes/:id/rechazar", authenticate, ordenes.postRechazar);
 
 // =============================================
 // PRESUPUESTOS POR ÁREA

@@ -2,6 +2,7 @@ const db = require("../config/database");
 const RolModulo = require("../models/RolModulo");
 const CompraSolicitud = require("../models/CompraSolicitud");
 const CompraCotizacion = require("../models/CompraCotizacion");
+const CompraOrden = require("../models/CompraOrden");
 const osticket = require("../config/osticket");
 const graph = require("../utils/graphClient");
 const { esCarpeta } = require("../services/sincronizarSharePoint.service");
@@ -44,6 +45,13 @@ async function pendientes(usuario, rutas) {
     ]);
     agregar(porAprobar, porAprobar === 1 ? "solicitud de compra por aprobar" : "solicitudes de compra por aprobar", "/compras/solicitudes");
     agregar(porElegir, porElegir === 1 ? "cotización por dar tu sugerencia" : "cotizaciones por dar tu sugerencia", "/compras/solicitudes");
+  }
+  // Firmar no depende de tener el módulo: le toca al gerente del área y a la lista de firmantes
+  const porFirmar = await seguro(() => CompraOrden.contarPorFirmar(usuario), 0);
+  agregar(porFirmar, porFirmar === 1 ? "orden de compra por firmar" : "órdenes de compra por firmar", "/compras/ordenes");
+  if (rutas.has("/compras/solicitudes")) {
+    const porEnviar = await seguro(() => CompraSolicitud.contarPorEnviarOrden(usuario.id), 0);
+    agregar(porEnviar, porEnviar === 1 ? "orden de compra por enviar" : "órdenes de compra por enviar", "/compras/solicitudes");
   }
   if (rutas.has("/compras/cotizaciones")) {
     const c = await seguro(() => CompraCotizacion.contar(usuario), {});

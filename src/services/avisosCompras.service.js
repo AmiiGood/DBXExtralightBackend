@@ -517,7 +517,7 @@ async function avisarDecidida(id) {
 async function avisarSobregiro(id) {
   if (!(await avisosEncendidos())) return;
   const s = await datosSolicitud(id);
-  if (s.estado !== "ELEGIDA") return;
+  if (!["ELEGIDA", "AUTORIZADA"].includes(s.estado)) return;
   const { rows } = await db.query(
     `SELECT s.compras_area_id, s.presupuesto_anio, s.presupuesto_mes, s.monto_presupuesto::float AS monto,
             s.monto_elegido::float AS monto_elegido, s.moneda_elegida, o.proveedor
@@ -546,7 +546,11 @@ async function avisarSobregiro(id) {
         titulo: `El presupuesto de ${escapar(s.area)} quedó en negativo`,
         subtitulo: `${escapar(s.folio)} · ${escapar(s.asunto)}`,
         cuerpo: `
-          <p><b>${escapar(s.solicitante)}</b> eligió a <b>${escapar(e.proveedor || "un proveedor")}</b>
+          <p>${
+            s.estado === "AUTORIZADA"
+              ? `Se autorizó la orden de compra de <b>${escapar(s.solicitante)}</b> a <b>${escapar(e.proveedor || "un proveedor")}</b>`
+              : `<b>${escapar(s.solicitante)}</b> eligió a <b>${escapar(e.proveedor || "un proveedor")}</b>`
+          }
              por ${dinero(e.monto_elegido, e.moneda_elegida)}; al presupuesto se le descontaron
              <b>${pesos(e.monto)}</b> (sin IVA, en pesos).</p>
           <table style="border-collapse:collapse;font-size:14px;margin:8px 0">
@@ -592,6 +596,143 @@ async function avisarOtrasOpciones(id) {
       texto: `${s.solicitante} pide otras opciones para ${s.folio}: ${rows[0]?.detalle || ""}`,
     });
   }
+}
+
+// ---------------------------------------------------------------------------
+// Orden de compra
+// ---------------------------------------------------------------------------
+
+const enlaceOrdenes = (params = {}) => {
+  const q = new URLSearchParams(params).toString();
+  return `${urlApp()}/compras/ordenes${q ? `?${q}` : ""}`;
+};
+
+const PASO_TEXTO = { GERENTE: "el gerente del área", COMPRAS: "Compras", FINANZAS: "Finanzas", DIRECCION: "Dirección" };
+
+async function datosOrden(solicitudId) {
+  const { rows } = await db.query(
+    `SELECT o.id, o.estado, o.paso, o.proveedor, o.monto::float AS monto, o.moneda, o.incluye_iva,
+            o.clasif_tipo, o.cuenta, o.centro_costos, o.motivo_rechazo, o.rechazada_paso,
+            ur.nombre_completo AS rechazo
+       FROM compras_ordenes o
+       LEFT JOIN usuarios ur ON ur.id = o.rechazada_por
+      WHERE o.solicitud_id = $1`,
+    [solicitudId],
+  );
+  if (!rows[0]) return null;
+  const { rows: firmas } = await db.query(
+    `SELECT f.paso, u.nombre_completo AS nombre, to_char(f.firmado_en, 'DD/MM HH24:MI') AS cuando
+       FROM compras_orden_firmas f JOIN usuarios u ON u.id = f.usuario_id
+      WHERE f.orden_id = $1 ORDER BY f.firmado_en`,
+    [rows[0].id],
+  );
+  return { ...rows[0], firmas };
+}
+
+/** Lo que sale en todos los correos de la orden: qué se compra y quién ya firmó. */
+function fichaOrden(s, o) {
+  const fila = (etiqueta, valor) => `
+    <tr>
+      <td style="padding:4px 12px 4px 0;color:#6b7280;white-space:nowrap;vertical-align:top">${etiqueta}</td>
+      <td style="padding:4px 0">${valor}</td>
+    </tr>`;
+  return `
+    <table style="border-collapse:collapse;font-size:14px;margin:8px 0">
+      ${fila("Folio", `<b>${escapar(s.folio)}</b> · ticket ${escapar(s.osticket_numero)}`)}
+      ${fila("Asunto", escapar(s.asunto))}
+      ${fila("Pidió", `${escapar(s.solicitante)} · ${escapar(s.area)}`)}
+      ${fila("Proveedor", `<b>${escapar(o.proveedor)}</b>`)}
+      ${fila("Monto", `<b>${dinero(o.monto, o.moneda)}</b> ${o.incluye_iva ? "con IVA" : "+ IVA"}`)}
+      ${o.clasif_tipo ? fila("Tipo", escapar(o.clasif_tipo)) : ""}
+      ${o.cuenta ? fila("Cuenta", `${escapar(o.cuenta)}${o.centro_costos ? ` · CC ${escapar(o.centro_costos)}` : ""}`) : ""}
+      ${
+        o.firmas.length
+          ? fila("Firmas", o.firmas.map((f) => `${escapar(f.nombre)} (${PASO_TEXTO[f.paso]}, ${f.cuando})`).join("<br />"))
+          : ""
+      }
+    </table>`;
+}
+
+/**
+ * Después de enviar, firmar o rechazar una orden: a quien le toca firmar, o a
+ * quien pidió y a Compras cuando termina (autorizada o rechazada).
+ */
+async function avisarOrden(solicitudId) {
+  const s = await datosSolicitud(solicitudId);
+  const o = await datosOrden(solicitudId);
+  if (!s || !o) return;
+
+  if (o.estado === "EN_FIRMAS") {
+    if (!(await avisosEncendidos(true))) return;
+    const { rows: firmantes } =
+      o.paso === "GERENTE"
+        ? await db.query(`SELECT id, email FROM usuarios WHERE id = ANY($1) AND activo AND id <> $2`, [
+            [s.gerente_id, s.suplente_id].filter(Boolean),
+            s.solicitante_id,
+          ])
+        : await db.query(
+            `SELECT u.id, u.email FROM compras_firmantes f JOIN usuarios u ON u.id = f.usuario_id
+              WHERE f.papel = $1 AND u.activo AND u.id <> $2`,
+            [o.paso, s.solicitante_id],
+          );
+    const que = { COMPRAS: " y pon el tipo", FINANZAS: " y pon la cuenta y el centro de costos" }[o.paso] || "";
+    for (const u of firmantes) {
+      await mandar({
+        tipo: "OC_POR_FIRMAR",
+        solicitudId,
+        usuario: u,
+        asunto: `Orden de compra por firmar: ${s.folio} · ${o.proveedor} · ${dinero(o.monto, o.moneda)}`,
+        html: plantilla({
+          titulo: "Tienes una orden de compra por firmar",
+          subtitulo: `Firmas como ${PASO_TEXTO[o.paso]}`,
+          cuerpo: `${fichaOrden(s, o)}
+            <p style="font-size:14px;color:#6b7280">Revísala${que}. Firmas con tu PIN; si no procede, recházala con el motivo.</p>`,
+          boton: { texto: "Revisar y firmar", url: enlaceOrdenes({ id: o.id }) },
+        }),
+        texto: `Orden de compra por firmar: ${s.folio} (${o.proveedor}, ${dinero(o.monto, o.moneda)}). ${enlaceOrdenes({ id: o.id })}`,
+      });
+    }
+    return;
+  }
+
+  if (!(await avisosEncendidos())) return;
+  const autorizada = o.estado === "AUTORIZADA";
+  const destinatarios = [solicitanteDe(s), ...(await genteDeCompras(solicitudId))].filter(Boolean);
+  const vistos = new Set();
+  for (const u of destinatarios) {
+    const clave = (u.email || "").toLowerCase();
+    if (!clave || vistos.has(clave)) continue;
+    vistos.add(clave);
+    const esSolicitante = u.id === s.solicitante_id;
+    await mandar({
+      tipo: autorizada ? "OC_AUTORIZADA" : "OC_RECHAZADA",
+      solicitudId,
+      usuario: u,
+      asunto: `${s.folio} (${s.osticket_numero}): orden de compra ${autorizada ? "autorizada" : "rechazada"}`,
+      html: plantilla({
+        titulo: autorizada ? "La orden de compra quedó autorizada" : "La orden de compra fue rechazada",
+        subtitulo: `${escapar(s.folio)} · ${escapar(s.asunto)}`,
+        cuerpo: `${fichaOrden(s, o)}${
+          autorizada
+            ? `<p style="font-size:14px;color:#6b7280">${
+                esSolicitante
+                  ? "Compras sigue con la compra sobre el mismo ticket."
+                  : "Ya tiene todas las firmas: puedes colocar la orden con el proveedor."
+              }</p>`
+            : `<p><b>${escapar(o.rechazo)}</b> la rechazó (firmaba por ${PASO_TEXTO[o.rechazada_paso]}):</p>
+               <div style="background:#fef2f2;border-left:3px solid #dc2626;padding:10px 12px;font-size:14px">${parrafos(o.motivo_rechazo)}</div>
+               <p style="font-size:14px;color:#6b7280">La solicitud termina aquí. Si todavía hace falta, hay que pedirla de nuevo.</p>`
+        }`,
+        boton: esSolicitante
+          ? { texto: "Ver la solicitud", url: enlace({ id: solicitudId }) }
+          : { texto: "Ver la orden", url: enlaceOrdenes({ id: o.id }) },
+      }),
+      texto: autorizada
+        ? `La orden de compra de ${s.folio} quedó autorizada.`
+        : `${o.rechazo} rechazó la orden de compra de ${s.folio}: ${o.motivo_rechazo}`,
+    });
+  }
+  if (autorizada) await avisarSobregiro(solicitudId);
 }
 
 /**
@@ -760,6 +901,7 @@ module.exports = {
   avisarDecidida,
   avisarOtrasOpciones,
   avisarSobregiro,
+  avisarOrden,
   mandarRecordatorios,
   mandarPrueba,
   ultimosCorreos,

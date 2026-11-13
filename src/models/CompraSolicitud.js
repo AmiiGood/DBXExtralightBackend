@@ -16,7 +16,13 @@ const { AppError } = require("../utils/errorHandler");
 
 const ESTADOS = [
   "PENDIENTE", "APROBADA", "RECHAZADA", "CANCELADA", "EN_COMPRAS", "COTIZADA", "SUGERIDA", "DECIDIDA", "ELEGIDA",
+  // La orden de compra (fase 3): esperando firmas, autorizada o rechazada en alguna firma
+  "EN_FIRMAS", "AUTORIZADA", "NO_AUTORIZADA",
 ];
+
+// Las que ya tienen opciones de Compras a la vista
+const CON_OPCIONES = ["COTIZADA", "SUGERIDA", "DECIDIDA", "ELEGIDA", "EN_FIRMAS", "AUTORIZADA", "NO_AUTORIZADA"];
+const CON_ORDEN = ["EN_FIRMAS", "AUTORIZADA", "NO_AUTORIZADA"];
 
 // Fechas como texto en hora de planta: la conexión ya trae la zona de México y
 // así no las mueve el JSON del navegador.
@@ -278,7 +284,7 @@ class CompraSolicitud {
 
     // Las opciones de Compras, una vez enviadas. Se requiere aquí y no arriba
     // para no cargar el modelo de cotizaciones en cada consulta de la bandeja.
-    const { cotizacion, descartadas, impacto } = ["COTIZADA", "SUGERIDA", "DECIDIDA", "ELEGIDA"].includes(sol.estado)
+    const { cotizacion, descartadas, impacto } = CON_OPCIONES.includes(sol.estado)
       ? await require("./CompraCotizacion").paraSolicitante(id)
       : { cotizacion: null, descartadas: 0, impacto: null };
 
@@ -289,8 +295,12 @@ class CompraSolicitud {
         ? await require("./CompraPresupuesto").saldoActual(sol.compras_area_id)
         : null);
 
+    // La orden de compra con sus firmas
+    const orden = CON_ORDEN.includes(sol.estado) ? await require("./CompraOrden").deSolicitud(id) : null;
+
     return {
       ...sol,
+      orden,
       archivos: archivos.rows,
       eventos: eventos.rows,
       cotizacion,
@@ -303,8 +313,21 @@ class CompraSolicitud {
         // Solo quien pidió sugiere (y la cambia mientras Compras no decide); su
         // gerente puede ver las opciones
         sugerir: p.esSolicitante && ["COTIZADA", "SUGERIDA"].includes(sol.estado),
+        // Decidida la opción, quien pidió manda la orden de compra; si es el
+        // gerente, la firma al mandarla (con su PIN)
+        enviarOrden: p.esSolicitante && sol.estado === "DECIDIDA",
+        firmaAlEnviar: p.esSolicitante && sol.estado === "DECIDIDA" && sol.gerente_id === usuario.id,
       },
     };
+  }
+
+  /** Cuántas de sus solicitudes ya decidió Compras y esperan que el usuario mande la orden de compra. */
+  static async contarPorEnviarOrden(usuarioId) {
+    const { rows } = await db.query(
+      `SELECT count(*)::int AS n FROM compras_solicitudes WHERE solicitante_id = $1 AND estado = 'DECIDIDA'`,
+      [usuarioId],
+    );
+    return rows[0].n;
   }
 
   /** Cuántas de sus solicitudes esperan la sugerencia técnica del usuario. */
