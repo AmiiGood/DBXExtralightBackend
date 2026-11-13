@@ -40,6 +40,9 @@ class CompraTablero {
                      WHEN tc.valor IS NOT NULL THEN round(f.monto / tc.valor, 2)::float END AS monto_usd,
                 nullif(f.autorizo_gerente, '') IS NOT NULL   AS firmo_gerente,
                 nullif(f.autorizo_direccion, '') IS NOT NULL AS firmo_direccion,
+                -- Dirección firma al final: le toca cuando ya firmaron los otros tres
+                (nullif(f.autorizo_gerente, '') IS NOT NULL AND nullif(f.autorizo_compras, '') IS NOT NULL
+                 AND nullif(f.autorizo_finanzas, '') IS NOT NULL AND nullif(f.autorizo_direccion, '') IS NULL) AS espera_direccion,
                 (nullif(f.autorizo_gerente, '') IS NOT NULL AND nullif(f.autorizo_compras, '') IS NOT NULL
                  AND nullif(f.autorizo_direccion, '') IS NOT NULL AND nullif(f.autorizo_finanzas, '') IS NOT NULL) AS completo
            FROM compras_formatos f

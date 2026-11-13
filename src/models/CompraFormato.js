@@ -16,12 +16,12 @@ const Catalogo = require("./CompraCatalogo");
 
 const SERIE_FIX = "SF43718";
 
-// Las cuatro firmas del formato, en el orden del flujo
+// Las cuatro firmas del formato, en el orden del flujo (13-nov-2026: Dirección al final)
 const FIRMAS = [
   { campo: "autorizo_gerente", nombre: "Gerente" },
   { campo: "autorizo_compras", nombre: "Compras" },
-  { campo: "autorizo_direccion", nombre: "Dirección" },
   { campo: "autorizo_finanzas", nombre: "Finanzas" },
+  { campo: "autorizo_direccion", nombre: "Dirección" },
 ];
 
 // Campos de texto: nombre en el body → [columna, largo máximo]
