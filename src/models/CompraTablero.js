@@ -12,7 +12,11 @@ const db = require("../config/database");
  * último publicado antes. El presupuesto está en pesos; en dólares se pasa con
  * el FIX más reciente.
  *
- * Las agrupaciones (por área, por mes, por tipo) las hace la pantalla: son
+ * Grupos de cuenta (migración 11): renglones del P&L de Finanzas, como
+ * MANUTENZIONE, con el concepto de cada cuenta. Una cuenta puede estar en
+ * varios grupos.
+ *
+ * Las agrupaciones (por área, por mes, por tipo, por grupo) las hace la pantalla: son
  * pocos renglones y así cambiar de moneda o de área no pide nada al servidor.
  */
 const SERIE_FIX = "SF43718";
@@ -23,7 +27,7 @@ class CompraTablero {
    * @param {String} hasta  YYYY-MM-DD
    */
   static async datos(desde, hasta) {
-    const [formatos, presupuesto, areas, tc] = await Promise.all([
+    const [formatos, presupuesto, areas, tc, grupos] = await Promise.all([
       db.query(
         `SELECT f.id, to_char(f.fecha, 'YYYY-MM-DD') AS fecha, f.ticket,
                 f.compras_area_id AS area_id, ca.nombre AS area_nombre,
@@ -66,6 +70,12 @@ class CompraTablero {
            FROM tipos_cambio WHERE serie = $1 ORDER BY fecha DESC LIMIT 1`,
         [SERIE_FIX],
       ),
+      db.query(
+        `SELECT g.grupo, g.codigo, g.concepto, c.nombre AS cuenta_nombre
+           FROM compras_grupos_cuenta g
+           JOIN compras_cuentas c ON c.codigo = g.codigo
+          ORDER BY g.grupo_orden, g.grupo, g.codigo`,
+      ),
     ]);
 
     return {
@@ -75,6 +85,7 @@ class CompraTablero {
       formatos: formatos.rows,
       presupuesto: presupuesto.rows,
       areas: areas.rows,
+      gruposCuenta: grupos.rows,
     };
   }
 }
