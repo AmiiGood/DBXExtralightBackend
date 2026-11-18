@@ -1,7 +1,6 @@
 const db = require("../config/database");
 const RolModulo = require("../models/RolModulo");
 const CompraSolicitud = require("../models/CompraSolicitud");
-const CompraCotizacion = require("../models/CompraCotizacion");
 const CompraOrden = require("../models/CompraOrden");
 const osticket = require("../config/osticket");
 const graph = require("../utils/graphClient");
@@ -39,27 +38,15 @@ async function pendientes(usuario, rutas) {
   };
 
   if (rutas.has("/compras/solicitudes")) {
-    const [porAprobar, porElegir] = await Promise.all([
-      seguro(() => CompraSolicitud.contarPendientes(usuario.id), 0),
-      seguro(() => CompraSolicitud.contarPorElegir(usuario.id), 0),
-    ]);
+    const porAprobar = await seguro(() => CompraSolicitud.contarPendientes(usuario.id), 0);
     agregar(porAprobar, porAprobar === 1 ? "solicitud de compra por aprobar" : "solicitudes de compra por aprobar", "/compras/solicitudes");
-    agregar(porElegir, porElegir === 1 ? "cotización por dar tu sugerencia" : "cotizaciones por dar tu sugerencia", "/compras/solicitudes");
   }
   // Firmar no depende de tener el módulo: le toca al gerente del área y a la lista de firmantes
   const porFirmar = await seguro(() => CompraOrden.contarPorFirmar(usuario), 0);
   agregar(porFirmar, porFirmar === 1 ? "orden de compra por firmar" : "órdenes de compra por firmar", "/compras/ordenes");
-  if (rutas.has("/compras/solicitudes")) {
-    const porEnviar = await seguro(() => CompraSolicitud.contarPorEnviarOrden(usuario.id), 0);
-    agregar(porEnviar, porEnviar === 1 ? "orden de compra por enviar" : "órdenes de compra por enviar", "/compras/solicitudes");
-  }
-  if (rutas.has("/compras/cotizaciones")) {
-    const c = await seguro(() => CompraCotizacion.contar(usuario), {});
-    const n = c?.["por-cotizar"] || 0;
-    agregar(n, n === 1 ? "solicitud por cotizar" : "solicitudes por cotizar", "/compras/cotizaciones");
-    const d = c?.["por-decidir"] || 0;
-    agregar(d, d === 1 ? "cotización con sugerencia por decidir" : "cotizaciones con sugerencia por decidir", "/compras/cotizaciones?vista=por-decidir");
-  }
+  // Compras: tickets que esperan que se dé de alta su orden (crear en Órdenes de compra)
+  const porAlta = await seguro(async () => ((await CompraOrden.alcanceAlta(usuario)).crear ? CompraOrden.contarPorDarDeAlta(usuario) : 0), 0);
+  agregar(porAlta, porAlta === 1 ? "ticket esperando su orden de compra" : "tickets esperando su orden de compra", "/compras/ordenes?vista=alta");
   if (rutas.has("/compras/aprobadores")) {
     const sinTicket = await seguro(async () => (await CompraSolicitud.listarPorEnviar()).length, 0);
     agregar(sinTicket, sinTicket === 1 ? "solicitud aprobada que no llegó a osTicket" : "solicitudes aprobadas que no llegaron a osTicket", "/compras/aprobadores");

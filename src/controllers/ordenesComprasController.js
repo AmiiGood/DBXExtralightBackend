@@ -1,5 +1,8 @@
+const fs = require("fs");
 const Orden = require("../models/CompraOrden");
 const avisos = require("../services/avisosCompras.service");
+const asignados = require("../services/asignadosCompras.service");
+const archivosCompras = require("../services/comprasArchivos.service");
 const pdfOrden = require("../services/pdfOrdenCompra.service");
 const { catchAsync, sendSuccess, AppError } = require("../utils/errorHandler");
 const { registrarLog, obtenerIP, obtenerUserAgent } = require("../utils/logger");
@@ -26,20 +29,93 @@ function log(req, accion, descripcion, registroId) {
   });
 }
 
+/** Manda un archivo guardado, en línea (para ver fotos y PDF) o como descarga. */
+function mandarArchivo(req, res, archivo) {
+  const ruta = archivosCompras.rutaAbsoluta(archivo.ruta);
+  if (!fs.existsSync(ruta)) throw new AppError("El archivo ya no está en el servidor", 410);
+  res.setHeader("Content-Type", archivo.tipo_mime);
+  res.setHeader(
+    "Content-Disposition",
+    `${req.query.descargar ? "attachment" : "inline"}; filename*=UTF-8''${encodeURIComponent(archivo.nombre_original)}`,
+  );
+  res.setHeader("Cross-Origin-Resource-Policy", "cross-origin");
+  fs.createReadStream(ruta).pipe(res);
+}
+
 /** GET /api/compras/ordenes?vista=por-firmar|firmadas|todas */
 const getOrdenes = catchAsync(async (req, res) => {
   const vista = req.query.vista || "por-firmar";
-  const [ordenes, porFirmar, verTodas] = await Promise.all([
+  const [ordenes, porFirmar, verTodas, alcance] = await Promise.all([
     Orden.listar(req.usuario, vista),
     Orden.contarPorFirmar(req.usuario),
     Orden.verTodas(req.usuario),
+    Orden.alcanceAlta(req.usuario),
   ]);
-  sendSuccess(res, 200, { vista, ordenes, porFirmar, verTodas });
+  const porDarDeAlta = alcance.crear ? await Orden.contarPorDarDeAlta(req.usuario) : 0;
+  sendSuccess(res, 200, { vista, ordenes, porFirmar, verTodas, darDeAlta: alcance.crear, porDarDeAlta });
 });
+
+// =============================================
+// ALTA DE LA ORDEN (Compras)
+// =============================================
+
+/**
+ * GET /api/compras/ordenes/alta
+ * Los tickets en Compras que esperan su orden. Antes lee de osTicket a quién
+ * está asignado cada uno (si la última lectura tiene más de un minuto).
+ */
+const getPorDarDeAlta = catchAsync(async (req, res) => {
+  let aviso = null;
+  try {
+    await asignados.actualizarSiHaceFalta();
+  } catch (e) {
+    aviso = `No se pudo leer de osTicket a quién está asignado cada ticket; se muestra lo último que se leyó (${e.message}).`;
+  }
+  const { alcance, solicitudes } = await Orden.porDarDeAlta(req.usuario);
+  sendSuccess(res, 200, { solicitudes, todas: alcance.todas, darDeAlta: alcance.crear, aviso });
+});
+
+/** GET /api/compras/ordenes/alta/:solicitudId */
+const getParaAlta = catchAsync(async (req, res) => {
+  sendSuccess(res, 200, await Orden.paraAlta(idDe(req.params.solicitudId), req.usuario));
+});
+
+/** GET /api/compras/ordenes/alta/:solicitudId/archivos/:archivoId */
+const getArchivoSolicitud = catchAsync(async (req, res) => {
+  mandarArchivo(req, res, await Orden.archivoDeSolicitud(idDe(req.params.solicitudId), idDe(req.params.archivoId), req.usuario));
+});
+
+/**
+ * POST /api/compras/ordenes/alta/:solicitudId
+ * multipart: proveedor, monto (sin IVA), moneda, comentario, archivos[] (la cotización, obligatoria)
+ */
+const postAlta = catchAsync(async (req, res) => {
+  const files = req.files || [];
+  try {
+    const demasiado = archivosCompras.excedeTotal(files);
+    if (demasiado) throw new AppError(demasiado, 400);
+    const r = await Orden.darDeAlta(idDe(req.params.solicitudId), req.usuario, req.body || {}, archivosCompras.describir(files));
+    await log(req, "CREATE", `Dio de alta la orden de compra de ${r.folio}`, r.id);
+    avisos.enSegundoPlano(avisos.avisarOrden, r.solicitudId);
+    sendSuccess(res, 201, r, `Orden de compra de ${r.folio} dada de alta. Ahora la firma el gerente del área.`);
+  } catch (e) {
+    archivosCompras.borrar(files);
+    throw e;
+  }
+});
+
+// =============================================
+// DETALLE, FIRMAS Y PDF
+// =============================================
 
 /** GET /api/compras/ordenes/:id */
 const getOrden = catchAsync(async (req, res) => {
   sendSuccess(res, 200, await Orden.obtener(idDe(req.params.id), req.usuario));
+});
+
+/** GET /api/compras/ordenes/:id/archivos/:archivoId — la cotización adjunta */
+const getArchivo = catchAsync(async (req, res) => {
+  mandarArchivo(req, res, await Orden.archivo(idDe(req.params.id), idDe(req.params.archivoId), req.usuario));
 });
 
 /**
@@ -57,21 +133,6 @@ const getPdf = catchAsync(async (req, res) => {
   );
   res.setHeader("Cross-Origin-Resource-Policy", "cross-origin");
   res.send(pdf);
-});
-
-/** POST /api/compras/solicitudes/:id/orden   { comentario, pin? } */
-const postEnviar = catchAsync(async (req, res) => {
-  const r = await Orden.enviar(idDe(req.params.id), req.usuario, req.body || {});
-  await log(req, "CREATE", `Envió la orden de compra de ${r.folio}${r.firmada ? " y la firmó como gerente" : ""}`, r.id);
-  avisos.enSegundoPlano(avisos.avisarOrden, r.solicitudId);
-  sendSuccess(
-    res,
-    201,
-    r,
-    r.firmada
-      ? "Orden de compra enviada con tu firma de gerente. Ahora firma Compras."
-      : "Orden de compra enviada. Ahora la firma el gerente de tu área.",
-  );
 });
 
 /** POST /api/compras/ordenes/:id/firmar   { pin, tipo?, cuenta?, centroCostos?, comentario? } */
@@ -107,4 +168,17 @@ const putFirmantes = catchAsync(async (req, res) => {
   sendSuccess(res, 200, r, "Firmantes guardados");
 });
 
-module.exports = { getOrdenes, getOrden, getPdf, postEnviar, postFirmar, postRechazar, getFirmantes, putFirmantes };
+module.exports = {
+  getOrdenes,
+  getPorDarDeAlta,
+  getParaAlta,
+  getArchivoSolicitud,
+  postAlta,
+  getOrden,
+  getArchivo,
+  getPdf,
+  postFirmar,
+  postRechazar,
+  getFirmantes,
+  putFirmantes,
+};

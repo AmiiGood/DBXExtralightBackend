@@ -106,6 +106,7 @@ class CompraPresupuesto {
   }
 
   /**
+   * (Ya no se usa desde que la cotización salió del DBX, 18-nov-2026.)
    * Lo que descontaría cada opción de una cotización si se eligiera hoy, y
    * cómo quedaría el área.
    *

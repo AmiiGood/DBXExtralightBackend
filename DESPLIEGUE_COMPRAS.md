@@ -39,8 +39,8 @@ En el servidor de producción, desde la carpeta del backend, con el `.env` que
 apunta a `dbx_ensayo`. Primero simuladas (validan y se revierten), luego de verdad:
 
 ```bash
-node scripts/aplicar-migracion.js 2026-10-02_compras_solicitudes_01_schema.sql 2026-10-02_compras_solicitudes_02_envio_osticket.sql 2026-10-02_compras_solicitudes_03_avisos.sql 2026-11-02_compras_solicitudes_04_cotizaciones.sql 2026-11-03_compras_solicitudes_05_nombre_tema_41.sql 2026-11-09_compras_solicitudes_06_presupuestos.sql 2026-11-10_compras_solicitudes_07_formatos.sql 2026-11-11_compras_solicitudes_08_tablero.sql 2026-11-11_compras_solicitudes_09_catalogos.sql 2026-11-12_compras_solicitudes_10_areas_sin_ticket.sql 2026-11-13_compras_solicitudes_11_grupos_cuenta.sql 2026-11-13_compras_solicitudes_12_sugerencia.sql 2026-11-13_firmas_01_usuarios.sql 2026-11-13_compras_solicitudes_13_orden_compra.sql 2026-11-13_compras_solicitudes_14_formato_de_orden.sql --simular
-node scripts/aplicar-migracion.js 2026-10-02_compras_solicitudes_01_schema.sql 2026-10-02_compras_solicitudes_02_envio_osticket.sql 2026-10-02_compras_solicitudes_03_avisos.sql 2026-11-02_compras_solicitudes_04_cotizaciones.sql 2026-11-03_compras_solicitudes_05_nombre_tema_41.sql 2026-11-09_compras_solicitudes_06_presupuestos.sql 2026-11-10_compras_solicitudes_07_formatos.sql 2026-11-11_compras_solicitudes_08_tablero.sql 2026-11-11_compras_solicitudes_09_catalogos.sql 2026-11-12_compras_solicitudes_10_areas_sin_ticket.sql 2026-11-13_compras_solicitudes_11_grupos_cuenta.sql 2026-11-13_compras_solicitudes_12_sugerencia.sql 2026-11-13_firmas_01_usuarios.sql 2026-11-13_compras_solicitudes_13_orden_compra.sql 2026-11-13_compras_solicitudes_14_formato_de_orden.sql
+node scripts/aplicar-migracion.js 2026-10-02_compras_solicitudes_01_schema.sql 2026-10-02_compras_solicitudes_02_envio_osticket.sql 2026-10-02_compras_solicitudes_03_avisos.sql 2026-11-02_compras_solicitudes_04_cotizaciones.sql 2026-11-03_compras_solicitudes_05_nombre_tema_41.sql 2026-11-09_compras_solicitudes_06_presupuestos.sql 2026-11-10_compras_solicitudes_07_formatos.sql 2026-11-11_compras_solicitudes_08_tablero.sql 2026-11-11_compras_solicitudes_09_catalogos.sql 2026-11-12_compras_solicitudes_10_areas_sin_ticket.sql 2026-11-13_compras_solicitudes_11_grupos_cuenta.sql 2026-11-13_compras_solicitudes_12_sugerencia.sql 2026-11-13_firmas_01_usuarios.sql 2026-11-13_compras_solicitudes_13_orden_compra.sql 2026-11-13_compras_solicitudes_14_formato_de_orden.sql 2026-11-18_compras_solicitudes_15_sin_cotizacion.sql --simular
+node scripts/aplicar-migracion.js 2026-10-02_compras_solicitudes_01_schema.sql 2026-10-02_compras_solicitudes_02_envio_osticket.sql 2026-10-02_compras_solicitudes_03_avisos.sql 2026-11-02_compras_solicitudes_04_cotizaciones.sql 2026-11-03_compras_solicitudes_05_nombre_tema_41.sql 2026-11-09_compras_solicitudes_06_presupuestos.sql 2026-11-10_compras_solicitudes_07_formatos.sql 2026-11-11_compras_solicitudes_08_tablero.sql 2026-11-11_compras_solicitudes_09_catalogos.sql 2026-11-12_compras_solicitudes_10_areas_sin_ticket.sql 2026-11-13_compras_solicitudes_11_grupos_cuenta.sql 2026-11-13_compras_solicitudes_12_sugerencia.sql 2026-11-13_firmas_01_usuarios.sql 2026-11-13_compras_solicitudes_13_orden_compra.sql 2026-11-13_compras_solicitudes_14_formato_de_orden.sql 2026-11-18_compras_solicitudes_15_sin_cotizacion.sql
 ```
 
 | Migración | Qué hace |
@@ -60,6 +60,7 @@ node scripts/aplicar-migracion.js 2026-10-02_compras_solicitudes_01_schema.sql 2
 | `firmas_01_usuarios` | Fase 2: tabla `usuarios_firmas`. Cada quien registra su firma **dibujada** una vez en **Mi firma** (abajo del menú, sin permiso de módulo) con un **PIN** de 4 a 6 números; registrarla pide su contraseña del DBX. 5 PIN equivocados la bloquean 15 min; el admin ve quién tiene firma y puede quitarla desde la misma pantalla. Con ella se firma la orden de compra (`13_orden_compra`). |
 | `13_orden_compra` | Fase 3: la **orden de compra**. Decidida la opción, quien pidió la manda (`EN_FIRMAS`) y la firman con su PIN, en orden: el **gerente** del área (o suplente; si la pidió el gerente, firma al mandarla), el **jefe de Compras** (pone el tipo), **Finanzas** (pone cuenta y CC) y **Dirección** (si el monto sin IVA llega al mínimo; en 0 firma siempre) → `AUTORIZADA`. Cualquier rechazo la termina (`NO_AUTORIZADA`). Al autorizarse **se descuenta del presupuesto** del área (Presupuestos cuenta `ELEGIDA` y `AUTORIZADA`). Tablas `compras_ordenes`, `compras_orden_firmas`, `compras_firmantes`; columna `compras_config.oc_monto_minimo_direccion`; módulo **Órdenes de compra**; correos OC_POR_FIRMAR, OC_AUTORIZADA y OC_RECHAZADA. Amplía `compras_solicitudes.estado` a 20 caracteres. |
 | `14_formato_de_orden` | Fase 4: la orden **autorizada** se escribe sola en **Formatos** (y así en el **Tablero**): fecha de autorización, monto **sin IVA**, quién firmó cada paso, tipo, cuenta y CC; si Dirección no firmó por el mínimo dice "No requerida (abajo del mínimo)". Si ya había un formato en papel con el mismo ticket, se liga y se sobrescribe con lo firmado. Esos formatos no se corrigen ni se borran desde Formatos y tienen su **PDF** con las firmas estampadas (también en Órdenes y en Solicitudes). Columna `compras_formatos.orden_id` y función `compras_formato_de_orden`; pasa las órdenes que ya estaban autorizadas. |
+| `15_sin_cotizacion` | **La cotización sale del DBX** (18-nov): cada agente cotiza a su manera. El **agente de Compras** del ticket da de alta la **orden de compra** desde *Órdenes de compra → Por dar de alta* con el proveedor, el **monto sin IVA**, la moneda y el **archivo de la cotización (obligatorio)**, y pasa a firmas. Quien pidió **ya no ve proveedor, montos ni el presupuesto** de su área; solo en qué firma va su orden. Tabla `compras_orden_archivos`. Lo que estaba en COTIZADA, SUGERIDA o DECIDIDA regresa a EN_COMPRAS. El módulo *Cotizaciones de Compras* se desactiva (sale del menú). |
 
 Las seis son idempotentes: si una falla a la mitad se puede volver a correr.
 
@@ -125,11 +126,11 @@ Si sale `sin OSTICKET_COMPRAS_API_URL/KEY`, falta el paso 4 o el 6.
   - "Formatos de Compras": **leer** = ver el reporte y exportarlo; **crear** = capturar
     (quien captura corrige los suyos); **editar** = corregir los de todos; **eliminar** = borrar.
   - "Tablero de Compras": **leer**, a Dirección (Celina y Stefano) y a quien deba ver el gasto. Es solo consulta: no da acceso a la captura ni a las cotizaciones.
-  - "Órdenes de compra": **leer** a los gerentes, al jefe de Compras, a Finanzas y a Dirección para que les salga en el menú; **editar** = ver **todas** las órdenes (seguimiento). Firmar no depende del permiso: le toca a quien es gerente del área o está en la lista de firmantes, y le llega el correo y le sale en Inicio.
-  - "Cotizaciones de Compras", para los **agentes de Compras**:
-    - **leer** = ve los tickets que tiene asignados en osTicket;
-    - **crear** = puede capturar y mandar opciones de proveedores;
-    - **editar** = ve y cotiza **todos** (para el jefe de Compras, Orlando).
+  - "Órdenes de compra":
+    - **leer** a los gerentes, a Finanzas y a Dirección para que les salga en el menú. Firmar no depende del permiso: le toca a quien es gerente del área o está en la lista de firmantes, y le llega el correo y le sale en Inicio;
+    - **crear** a los **agentes de Compras**: dan de alta la orden de los tickets que tienen asignados en osTicket (se cruzan por el correo);
+    - **editar** al **jefe de Compras** (Orlando): ve todas las órdenes y da de alta la de cualquier ticket.
+  - "Cotizaciones de Compras" ya no se usa (la migración 15 la desactiva).
 - [ ] **Firmas de la orden de compra** (en Aprobadores): quién firma por **Compras** (Orlando, y quien lo cubra), **Finanzas** y **Dirección** (Celina y Stefano), y desde qué monto firma Dirección (0 = todas). Cada uno registra su firma en **Mi firma** antes de su primera orden; la lista marca con un triángulo a quien todavía no la tiene.
 - [ ] **Usuarios**: cada quien con su **usuario propio** y su correo real
       `@foamcreations.mx`. A ese correo contesta Compras desde osTicket. Si el
@@ -152,15 +153,16 @@ Si sale `sin OSTICKET_COMPRAS_API_URL/KEY`, falta el paso 4 o el 6.
       aprobación al pie; Compras recibe su alerta de siempre.
 - [ ] A quien pidió le llega "ya está en Compras (ticket AD-…)".
 - [ ] Probar también un rechazo: llega el motivo.
-- [ ] En **Cotizaciones de Compras**, el agente asignado ve el ticket en "Por
-      cotizar" (a más tardar 5 minutos después de crearse, o al abrir la bandeja).
-      Captura dos o tres proveedores con foto y lo manda.
-- [ ] A quien pidió le llega "Elige proveedor"; en Solicitudes de Compra ve el
-      comparativo y elige. Al agente le llega "ya eligieron" con el monto.
-- [ ] Probar "Ninguna me sirve": la solicitud regresa a "Por cotizar" del agente
-      con el motivo.
+- [ ] En **Órdenes de compra → Por dar de alta**, el agente asignado ve el ticket
+      (a más tardar 5 minutos después de crearse, o al abrir la pestaña). Cotiza como
+      siempre y da de alta la orden con el proveedor, el monto sin IVA y la cotización.
+- [ ] Le llega "orden por firmar" al gerente y firma con su PIN; luego Orlando
+      (tipo), Finanzas (cuenta y CC) y Dirección.
+- [ ] Quien pidió ve en Solicitudes en qué firma va, sin proveedor ni montos.
+- [ ] Ya autorizada: sale en Formatos con "Firmado en el DBX", en el Tablero y su
+      PDF tiene las cuatro firmas.
 
-> El monto elegido se queda en el DBX. La API de osTicket solo crea tickets, no
+> El monto de la orden se queda en el DBX. La API de osTicket solo crea tickets, no
 > los modifica, así que el ticket no se actualiza solo: Compras sigue moviendo su
 > estado ("Cotización entregada", "PO colocada") en osTicket como hoy, y el DBX lo
 > muestra.

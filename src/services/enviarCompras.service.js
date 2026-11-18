@@ -152,7 +152,7 @@ async function marcarEnviada(id, { numero, ticketId }, encontrada = false) {
   // A quien pidió, con el número del ticket
   avisos.enSegundoPlano(avisos.avisarEnCompras, id);
   // osTicket lo asigna al agente del tema al crearlo: que aparezca ya en su
-  // bandeja de Cotizaciones y no hasta la siguiente vuelta
+  // bandeja de órdenes por dar de alta y no hasta la siguiente vuelta
   setImmediate(() =>
     require("./asignadosCompras.service")
       .actualizar()

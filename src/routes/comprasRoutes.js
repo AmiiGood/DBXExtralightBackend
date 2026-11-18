@@ -1,7 +1,6 @@
 const express = require("express");
 const router = express.Router();
 const controller = require("../controllers/comprasController");
-const cotizaciones = require("../controllers/cotizacionesComprasController");
 const presupuestos = require("../controllers/presupuestosComprasController");
 const { authenticate } = require("../middlewares/auth");
 const formatos = require("../controllers/formatosComprasController");
@@ -14,9 +13,6 @@ const MODULO = "/compras/solicitudes";
 // Configurar quién aprueba es otra cosa que pedir: va por separado
 const MODULO_APROBADORES = "/compras/aprobadores";
 const MODULO_REPORTES = "/compras/reportes";
-// Leer = ver lo asignado; crear = cotizar; editar = ver todo (jefe de Compras).
-// Lo de "ver todo" lo resuelve el modelo, aquí basta con leer o crear.
-const MODULO_COTIZACIONES = "/compras/cotizaciones";
 // Leer = ver presupuesto, ejercido y disponible; editar = capturar montos
 const MODULO_PRESUPUESTOS = "/compras/presupuestos";
 // Leer = ver el reporte; crear = capturar; editar = corregir los de otros; eliminar = borrar
@@ -195,97 +191,14 @@ router.put(
 );
 
 // =============================================
-// COTIZACIONES
-//
-// Compras captura las opciones de proveedores y las manda; quien pidió sugiere
-// una con su opinión técnica y Compras decide. Sugerir y pedir otras opciones
-// solo piden abrir Solicitudes: que sea quien pidió lo revisa el modelo.
-// =============================================
-
-/**
- * @route   GET /api/compras/cotizaciones?vista=por-cotizar|esperando|por-decidir|decididas
- * @desc    Lo que el agente tiene asignado en osTicket (o todo, para el jefe)
- */
-router.get("/cotizaciones", authenticate, puedeLeer(MODULO_COTIZACIONES), cotizaciones.getBandeja);
-
-/**
- * @route   GET /api/compras/cotizaciones/:id
- * @desc    La solicitud con su borrador, la cotización enviada y las descartadas
- */
-router.get("/cotizaciones/:id", authenticate, puedeLeer(MODULO_COTIZACIONES), cotizaciones.getSolicitud);
-
-/**
- * @route   PUT /api/compras/cotizaciones/:id/borrador
- * @desc    Guarda el comparativo tal como está en pantalla
- */
-router.put("/cotizaciones/:id/borrador", authenticate, puedeCrear(MODULO_COTIZACIONES), cotizaciones.putBorrador);
-
-/**
- * @route   POST /api/compras/cotizaciones/:id/archivos
- * @desc    Fotos y PDF de los proveedores (multipart: archivos[])
- */
-router.post(
-  "/cotizaciones/:id/archivos",
-  authenticate,
-  puedeCrear(MODULO_COTIZACIONES),
-  recibirArchivos,
-  cotizaciones.postArchivos,
-);
-
-/**
- * @route   POST /api/compras/cotizaciones/:id/enviar
- * @desc    Manda las opciones a quien pidió
- */
-router.post("/cotizaciones/:id/enviar", authenticate, puedeCrear(MODULO_COTIZACIONES), cotizaciones.postEnviar);
-
-/**
- * @route   POST /api/compras/cotizaciones/:id/decidir
- * @desc    Compras decide la opción (pide poder cotizar)
- */
-router.post("/cotizaciones/:id/decidir", authenticate, puedeCrear(MODULO_COTIZACIONES), cotizaciones.postDecidir);
-
-/**
- * @route   GET /api/compras/cotizaciones/:id/solicitud-archivos/:archivoId
- * @desc    Un adjunto de la solicitud, visto desde Compras
- */
-router.get(
-  "/cotizaciones/:id/solicitud-archivos/:archivoId",
-  authenticate,
-  puedeLeer(MODULO_COTIZACIONES),
-  cotizaciones.getArchivoSolicitud,
-);
-
-/**
- * @route   GET /api/compras/cotizacion-archivos/:archivoId
- * @desc    Foto o PDF de un proveedor. Lo ve Compras y, ya enviada, quien pidió:
- *          el acceso lo revisa el modelo
- */
-router.get("/cotizacion-archivos/:archivoId", authenticate, cotizaciones.getArchivoCotizacion);
-
-/**
- * @route   POST /api/compras/solicitudes/:id/sugerir
- * @desc    Quien pidió sugiere una opción con su opinión técnica
- */
-router.post("/solicitudes/:id/sugerir", authenticate, puedeLeer(MODULO), cotizaciones.postSugerir);
-
-/**
- * @route   POST /api/compras/solicitudes/:id/otras-opciones
- * @desc    Ninguna opción le sirve: regresa a Compras
- */
-router.post("/solicitudes/:id/otras-opciones", authenticate, puedeLeer(MODULO), cotizaciones.postOtrasOpciones);
-
-// =============================================
 // ORDEN DE COMPRA
 //
-// Quién firma sale de los datos (gerente del área y la lista de firmantes),
-// no del rol: por eso firmar solo pide sesión. El modelo revisa a quién le toca.
+// La cotización se hace fuera del DBX (18-nov-2026). El agente de Compras del
+// ticket da de alta la orden con proveedor, monto sin IVA y la cotización; el
+// modelo revisa que le toque (crear en Órdenes de compra y el ticket asignado,
+// o editar para ver todos). Quién firma sale de los datos (gerente del área y
+// la lista de firmantes), no del rol: firmar solo pide sesión.
 // =============================================
-
-/**
- * @route   POST /api/compras/solicitudes/:id/orden
- * @desc    Quien pidió envía la orden de compra de lo que decidió Compras
- */
-router.post("/solicitudes/:id/orden", authenticate, puedeLeer(MODULO), ordenes.postEnviar);
 
 /**
  * @route   GET|PUT /api/compras/ordenes/firmantes
@@ -296,6 +209,30 @@ router.get("/ordenes/firmantes", authenticate, puedeLeer(MODULO_APROBADORES), or
 router.put("/ordenes/firmantes", authenticate, puedeEditar(MODULO_APROBADORES), ordenes.putFirmantes);
 
 /**
+ * @route   GET /api/compras/ordenes/alta
+ * @desc    Tickets en Compras que esperan su orden (los asignados al agente, o todos para el jefe)
+ */
+router.get("/ordenes/alta", authenticate, ordenes.getPorDarDeAlta);
+
+/**
+ * @route   GET /api/compras/ordenes/alta/:solicitudId
+ * @desc    La solicitud, para darle de alta su orden
+ */
+router.get("/ordenes/alta/:solicitudId", authenticate, ordenes.getParaAlta);
+
+/**
+ * @route   GET /api/compras/ordenes/alta/:solicitudId/archivos/:archivoId
+ * @desc    Un adjunto de la solicitud, visto desde Compras
+ */
+router.get("/ordenes/alta/:solicitudId/archivos/:archivoId", authenticate, ordenes.getArchivoSolicitud);
+
+/**
+ * @route   POST /api/compras/ordenes/alta/:solicitudId
+ * @desc    Da de alta la orden (multipart: proveedor, monto, moneda, comentario, archivos[])
+ */
+router.post("/ordenes/alta/:solicitudId", authenticate, recibirArchivos, ordenes.postAlta);
+
+/**
  * @route   GET /api/compras/ordenes?vista=por-firmar|firmadas|todas
  */
 router.get("/ordenes", authenticate, ordenes.getOrdenes);
@@ -304,6 +241,12 @@ router.get("/ordenes", authenticate, ordenes.getOrdenes);
  * @route   GET /api/compras/ordenes/:id
  */
 router.get("/ordenes/:id", authenticate, ordenes.getOrden);
+
+/**
+ * @route   GET /api/compras/ordenes/:id/archivos/:archivoId
+ * @desc    La cotización adjunta a la orden
+ */
+router.get("/ordenes/:id/archivos/:archivoId", authenticate, ordenes.getArchivo);
 
 /**
  * @route   GET /api/compras/ordenes/:id/pdf

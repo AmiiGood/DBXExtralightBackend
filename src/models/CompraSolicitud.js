@@ -20,9 +20,16 @@ const ESTADOS = [
   "EN_FIRMAS", "AUTORIZADA", "NO_AUTORIZADA",
 ];
 
-// Las que ya tienen opciones de Compras a la vista
-const CON_OPCIONES = ["COTIZADA", "SUGERIDA", "DECIDIDA", "ELEGIDA", "EN_FIRMAS", "AUTORIZADA", "NO_AUTORIZADA"];
 const CON_ORDEN = ["EN_FIRMAS", "AUTORIZADA", "NO_AUTORIZADA"];
+
+// Montos que quien pidió no ve (decisión del 18-nov-2026): ni proveedor, ni
+// cuánto cuesta, ni cuánto le queda al área. El gerente sí.
+const MONTOS = ["opcion_elegida_id", "monto_elegido", "monto_presupuesto", "moneda_elegida", "opcion_sugerida_id"];
+const sinMontos = (sol) => {
+  const s = { ...sol };
+  for (const k of MONTOS) delete s[k];
+  return s;
+};
 
 // Fechas como texto en hora de planta: la conexión ya trae la zona de México y
 // así no las mueve el JSON del navegador.
@@ -214,7 +221,7 @@ class CompraSolicitud {
         LIMIT $${valores.length}`,
       valores,
     );
-    return rows;
+    return rows.map(sinMontos);
   }
 
   /**
@@ -282,61 +289,34 @@ class CompraSolicitud {
       ),
     ]);
 
-    // Las opciones de Compras, una vez enviadas. Se requiere aquí y no arriba
-    // para no cargar el modelo de cotizaciones en cada consulta de la bandeja.
-    const { cotizacion, descartadas, impacto } = CON_OPCIONES.includes(sol.estado)
-      ? await require("./CompraCotizacion").paraSolicitante(id)
-      : { cotizacion: null, descartadas: 0, impacto: null };
+    // Montos y presupuesto: el gerente y su suplente (y el administrador); quien
+    // solo pidió, no
+    const veMontos = (p.como !== null && sol.solicitante_id !== usuario.id) || sol.gerente_id === usuario.id || Boolean(usuario.rol?.esAdmin);
 
-    // Cuánto le queda al área: el gerente lo ve al aprobar y quien pide al sugerir
+    // Cuánto le queda al área, para el gerente al aprobar
     const presupuesto =
-      impacto?.saldo ||
-      (["PENDIENTE", "APROBADA", "EN_COMPRAS"].includes(sol.estado)
+      veMontos && ["PENDIENTE", "APROBADA", "EN_COMPRAS"].includes(sol.estado)
         ? await require("./CompraPresupuesto").saldoActual(sol.compras_area_id)
-        : null);
+        : null;
 
-    // La orden de compra con sus firmas
-    const orden = CON_ORDEN.includes(sol.estado) ? await require("./CompraOrden").deSolicitud(id) : null;
+    // La orden de compra: completa para el gerente, solo las firmas para quien pidió
+    const orden = CON_ORDEN.includes(sol.estado)
+      ? await require("./CompraOrden").deSolicitud(id, { conMontos: veMontos })
+      : null;
 
     return {
-      ...sol,
+      ...(veMontos ? sol : sinMontos(sol)),
       orden,
       archivos: archivos.rows,
-      eventos: eventos.rows,
-      cotizacion,
-      descartadas,
-      impacto,
+      // Lo que se anotaba con montos (la cotización y la orden) no se le enseña a quien solo pidió
+      eventos: veMontos ? eventos.rows : eventos.rows.map((e) => (/^(OC_ALTA|OC_ENVIADA|OC_FIRMA_|OC_AUTORIZADA|ELEGIDA|DECIDIDA|SUGERIDA|COTIZADA)/.test(e.tipo) ? { ...e, detalle: null } : e)),
       presupuesto,
+      veMontos,
       permisos: {
         decidir: p.puedeDecidir && sol.estado === "PENDIENTE",
         cancelar: p.esSolicitante && sol.estado === "PENDIENTE",
-        // Solo quien pidió sugiere (y la cambia mientras Compras no decide); su
-        // gerente puede ver las opciones
-        sugerir: p.esSolicitante && ["COTIZADA", "SUGERIDA"].includes(sol.estado),
-        // Decidida la opción, quien pidió manda la orden de compra; si es el
-        // gerente, la firma al mandarla (con su PIN)
-        enviarOrden: p.esSolicitante && sol.estado === "DECIDIDA",
-        firmaAlEnviar: p.esSolicitante && sol.estado === "DECIDIDA" && sol.gerente_id === usuario.id,
       },
     };
-  }
-
-  /** Cuántas de sus solicitudes ya decidió Compras y esperan que el usuario mande la orden de compra. */
-  static async contarPorEnviarOrden(usuarioId) {
-    const { rows } = await db.query(
-      `SELECT count(*)::int AS n FROM compras_solicitudes WHERE solicitante_id = $1 AND estado = 'DECIDIDA'`,
-      [usuarioId],
-    );
-    return rows[0].n;
-  }
-
-  /** Cuántas de sus solicitudes esperan la sugerencia técnica del usuario. */
-  static async contarPorElegir(usuarioId) {
-    const { rows } = await db.query(
-      `SELECT count(*)::int AS n FROM compras_solicitudes WHERE solicitante_id = $1 AND estado = 'COTIZADA'`,
-      [usuarioId],
-    );
-    return rows[0].n;
   }
 
   /** Datos de un archivo, solo si el usuario puede ver su solicitud. */

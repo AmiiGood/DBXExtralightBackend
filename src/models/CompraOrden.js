@@ -3,21 +3,29 @@ const RolModulo = require("./RolModulo");
 const Firma = require("./Firma");
 const Presupuesto = require("./CompraPresupuesto");
 const tipoCambio = require("../services/tipoCambio.service");
+const archivosCompras = require("../services/comprasArchivos.service");
 const { AppError } = require("../utils/errorHandler");
 
 /**
- * La orden de compra con sus cuatro firmas (fase 3 del flujo con firmas).
+ * La orden de compra con sus cuatro firmas.
  *
- * Ver migrations/2026-11-13_compras_solicitudes_13_orden_compra.sql. En corto:
+ * Ver migrations/2026-11-13_compras_solicitudes_13_orden_compra.sql y
+ * 2026-11-18_compras_solicitudes_15_sin_cotizacion.sql. En corto:
  *
- *   DECIDIDA → quien pidió la envía → firma el gerente (o suplente) → firma el
- *   jefe de Compras con el tipo → firma Finanzas con la cuenta y el CC → firma
- *   Dirección (si el monto llega al mínimo) → AUTORIZADA, y se descuenta del
- *   presupuesto del área. Cualquier rechazo la termina (NO_AUTORIZADA).
+ *   EN_COMPRAS (Compras cotiza fuera del DBX) → el agente de Compras da de alta
+ *   la orden con proveedor, monto sin IVA y el archivo de la cotización → firma
+ *   el gerente (o suplente) → firma el jefe de Compras con el tipo → firma
+ *   Finanzas con la cuenta y el CC → firma Dirección (si el monto llega al
+ *   mínimo) → AUTORIZADA, y se descuenta del presupuesto del área. Cualquier
+ *   rechazo la termina (NO_AUTORIZADA).
  *
  * Quién firma NO depende del rol ni del módulo: el gerente sale del área y los
- * demás de compras_firmantes. El módulo /compras/ordenes solo da la entrada en
- * el menú y, con editar, ver todas.
+ * demás de compras_firmantes. El módulo /compras/ordenes pone la entrada en el
+ * menú; crear = dar de alta órdenes de sus tickets (agentes de Compras);
+ * editar = ver todas y dar de alta cualquiera (el jefe de Compras).
+ *
+ * Quien pidió no ve proveedor, montos ni presupuesto (decisión del 18-nov):
+ * en Solicitudes solo ve en qué firma va su orden.
  */
 
 const MODULO = "/compras/ordenes";
@@ -53,6 +61,14 @@ async function verTodas(usuario) {
   return rolId ? RolModulo.verificarPermiso(rolId, MODULO, "puede_editar") : false;
 }
 
+async function puedeCrear(usuario) {
+  if (esAdmin(usuario)) return true;
+  const rolId = usuario.rol?.id || usuario.rolId;
+  return rolId ? RolModulo.verificarPermiso(rolId, MODULO, "puede_crear") : false;
+}
+
+const correoDe = (u) => (u?.email || "").trim().toLowerCase();
+
 /** Quien ve el reporte de Formatos también abre el PDF de las órdenes que se volvieron formato. */
 async function leeFormatos(usuario) {
   if (esAdmin(usuario)) return true;
@@ -84,9 +100,10 @@ function puedeFirmar(usuario, o, papeles) {
   const despues = PASOS.slice(PASOS.indexOf(o.paso) + 1).some((p) => papeles.has(p));
   const esperar = { puede: false, mostrar: true, porque: `Todavía no te toca: falta que firme ${NOMBRE_PASO[o.paso]}` };
   if (o.paso === "GERENTE") {
-    // El suplente que pidió necesita al gerente; nadie se firma a sí mismo aquí
-    if (propia) return { puede: false, porque: "No puedes firmar como gerente tu propia orden" };
-    if (o.gerente_id === usuario.id) return { puede: true, como: "GERENTE" };
+    // Si la pidió el gerente, él es la autorización del área (como al aprobar
+    // la solicitud). Si la pidió el suplente, tiene que firmar el gerente.
+    if (o.gerente_id === usuario.id) return { puede: true, como: propia ? "PROPIA" : "GERENTE" };
+    if (propia) return { puede: false, mostrar: true, porque: "La firma tu gerente: tú la pediste como suplente" };
     if (o.suplente_id === usuario.id) return { puede: true, como: "SUPLENTE" };
     return despues ? esperar : { puede: false, porque: "No eres el gerente ni el suplente de esta área" };
   }
@@ -111,6 +128,7 @@ const SELECT_ORDEN = `
          o.monto_mxn_sin_iva::float AS monto_mxn_sin_iva,
          ${F("o.enviada_en")} AS enviada_en, ${F("o.terminada_en")} AS terminada_en,
          o.rechazada_paso, o.motivo_rechazo, ur.nombre_completo AS rechazada_por_nombre,
+         o.enviada_por, ue.nombre_completo AS enviada_por_nombre,
          s.folio, s.asunto, s.detalle, s.osticket_numero, s.asignado_nombre, s.solicitante_id,
          s.compras_area_id, s.monto_presupuesto::float AS monto_presupuesto,
          ca.nombre AS area_nombre, ca.gerente_id, ca.suplente_id,
@@ -120,6 +138,7 @@ const SELECT_ORDEN = `
     JOIN compras_areas ca ON ca.id = s.compras_area_id
     JOIN usuarios us ON us.id = s.solicitante_id
     LEFT JOIN usuarios ur ON ur.id = o.rechazada_por
+    LEFT JOIN usuarios ue ON ue.id = o.enviada_por
     LEFT JOIN compras_cuentas cc ON cc.codigo = o.cuenta`;
 
 class CompraOrden {
@@ -178,82 +197,178 @@ class CompraOrden {
   }
 
   // =========================================================================
-  // Enviar
+  // Alta de la orden (Compras)
   // =========================================================================
 
+  /** Qué puede el usuario en el alta: crear (sus tickets) y todas (el jefe). */
+  static async alcanceAlta(usuario) {
+    const [crear, todas] = await Promise.all([puedeCrear(usuario), verTodas(usuario)]);
+    return { crear: crear || todas, todas, correo: correoDe(usuario) };
+  }
+
   /**
-   * Quien pidió envía la orden de compra de lo que decidió Compras. Si es el
-   * gerente del área, firma al enviarla (con su PIN).
+   * Los tickets en Compras que esperan su orden: los asignados al agente en
+   * osTicket (cruzando el correo) o todos para el jefe.
    */
-  static async enviar(solicitudId, usuario, { comentario, pin } = {}) {
-    const nota = texto(comentario, 1000);
+  static async porDarDeAlta(usuario) {
+    const a = await this.alcanceAlta(usuario);
+    if (!a.crear) return { alcance: a, solicitudes: [] };
+    const { rows } = await db.query(
+      `SELECT s.id, s.folio, s.asunto, s.osticket_numero, s.osticket_estado, s.asignado_nombre, s.asignado_email,
+              ${F("s.enviado_en")} AS enviado_en, ca.nombre AS area_nombre, us.nombre_completo AS solicitante_nombre,
+              EXISTS (SELECT 1 FROM usuarios u WHERE lower(u.email) = s.asignado_email AND u.activo) AS asignado_en_dbx
+         FROM compras_solicitudes s
+         JOIN compras_areas ca ON ca.id = s.compras_area_id
+         JOIN usuarios us ON us.id = s.solicitante_id
+        WHERE s.estado = 'EN_COMPRAS'
+          AND ($1 OR (s.asignado_email IS NOT NULL AND s.asignado_email = $2))
+        ORDER BY s.enviado_en ASC NULLS LAST
+        LIMIT 300`,
+      [a.todas, a.correo],
+    );
+    return { alcance: a, solicitudes: rows };
+  }
+
+  static async contarPorDarDeAlta(usuario) {
+    return (await this.porDarDeAlta(usuario)).solicitudes.length;
+  }
+
+  /** Bloquea la solicitud y revisa que el usuario le pueda dar de alta su orden. */
+  static async tomarParaAlta(cliente, solicitudId, usuario) {
+    const a = await this.alcanceAlta(usuario);
+    const { rows } = await cliente.query(
+      `SELECT s.id, s.folio, s.estado, s.asignado_email, s.solicitante_id, ca.gerente_id
+         FROM compras_solicitudes s JOIN compras_areas ca ON ca.id = s.compras_area_id
+        WHERE s.id = $1 FOR UPDATE OF s`,
+      [solicitudId],
+    );
+    const s = rows[0];
+    const leToca = s && (a.todas || (a.correo && s.asignado_email === a.correo));
+    if (!s || !a.crear || !leToca) throw new AppError("La solicitud no existe", 404);
+    if (s.estado !== "EN_COMPRAS") {
+      throw new AppError(
+        ["EN_FIRMAS", "AUTORIZADA", "NO_AUTORIZADA"].includes(s.estado)
+          ? "Esta solicitud ya tiene orden de compra"
+          : "Esta solicitud todavía no está en Compras",
+        409,
+      );
+    }
+    if (!s.gerente_id) {
+      throw new AppError("El área de esta solicitud no tiene gerente: nadie podría firmar la orden. Avísale al administrador.", 409);
+    }
+    return s;
+  }
+
+  /** La solicitud vista desde Compras para darle de alta su orden. */
+  static async paraAlta(solicitudId, usuario) {
+    const a = await this.alcanceAlta(usuario);
+    const { rows } = await db.query(
+      `SELECT s.id, s.folio, s.asunto, s.detalle, s.estado, s.osticket_numero, s.osticket_estado,
+              s.asignado_nombre, s.asignado_email, ${F("s.creado_en")} AS creado_en, ${F("s.enviado_en")} AS enviado_en,
+              s.compras_area_id, ca.nombre AS area_nombre, us.nombre_completo AS solicitante_nombre,
+              ud.nombre_completo AS aprobo_nombre
+         FROM compras_solicitudes s
+         JOIN compras_areas ca ON ca.id = s.compras_area_id
+         JOIN usuarios us ON us.id = s.solicitante_id
+         LEFT JOIN usuarios ud ON ud.id = s.decidido_por
+        WHERE s.id = $1`,
+      [solicitudId],
+    );
+    const s = rows[0];
+    const leToca = s && (a.todas || (a.correo && s.asignado_email === a.correo));
+    if (!s || !a.crear || !leToca) throw new AppError("La solicitud no existe", 404);
+    const [{ rows: archivos }, saldo] = await Promise.all([
+      db.query(
+        "SELECT id, nombre_original, tipo_mime, tamano_bytes FROM compras_solicitud_archivos WHERE solicitud_id = $1 ORDER BY id",
+        [solicitudId],
+      ),
+      Presupuesto.saldoActual(s.compras_area_id),
+    ]);
+    return { ...s, archivos, presupuesto: saldo, max: { mb: archivosCompras.MAX_MB, archivos: archivosCompras.MAX_ARCHIVOS } };
+  }
+
+  /** Un adjunto de la solicitud, para quien da de alta la orden. */
+  static async archivoDeSolicitud(solicitudId, archivoId, usuario) {
+    await this.paraAlta(solicitudId, usuario);
+    const { rows } = await db.query(
+      "SELECT nombre_original, ruta, tipo_mime FROM compras_solicitud_archivos WHERE id = $1 AND solicitud_id = $2",
+      [archivoId, solicitudId],
+    );
+    if (!rows[0]) throw new AppError("El archivo no existe", 404);
+    return rows[0];
+  }
+
+  /**
+   * Compras da de alta la orden de compra: proveedor, monto sin IVA, moneda y
+   * el archivo de la cotización (obligatorio). Pasa a firmas del gerente.
+   *
+   * @param {Object[]} archivos  ya en disco (comprasArchivos.describir); si algo
+   *                             falla aquí, quien llama los borra
+   */
+  static async darDeAlta(solicitudId, usuario, datos = {}, archivos = []) {
+    const proveedor = String(datos.proveedor ?? "").replace(/\s+/g, " ").trim();
+    if (!proveedor) throw new AppError("Escribe el proveedor", 400);
+    if (proveedor.length > 200) throw new AppError("El nombre del proveedor es demasiado largo (máximo 200)", 400);
+    const monto = Number(String(datos.monto ?? "").replace(/[$,\s]/g, ""));
+    if (!Number.isFinite(monto) || monto <= 0) throw new AppError("Escribe el monto sin IVA", 400);
+    const moneda = datos.moneda === "USD" ? "USD" : "MXN";
+    const nota = texto(datos.comentario, 1000);
+    if (!archivos.length) throw new AppError("Adjunta la cotización del proveedor (PDF, imagen o Excel)", 400);
+
     const cliente = await db.pool.connect();
     try {
       await cliente.query("BEGIN");
-      const { rows } = await cliente.query(
-        `SELECT s.id, s.folio, s.estado, s.solicitante_id, s.opcion_elegida_id, s.monto_elegido::float AS monto,
-                s.moneda_elegida, ca.gerente_id, ca.suplente_id, ca.activo AS area_activa,
-                op.proveedor, c.incluye_iva
-           FROM compras_solicitudes s
-           JOIN compras_areas ca ON ca.id = s.compras_area_id
-           LEFT JOIN compras_cotizacion_opciones op ON op.id = s.opcion_elegida_id
-           LEFT JOIN compras_cotizaciones c ON c.id = op.cotizacion_id
-          WHERE s.id = $1 FOR UPDATE OF s`,
-        [solicitudId],
-      );
-      const s = rows[0];
-      if (!s || s.solicitante_id !== usuario.id) throw new AppError("La solicitud no existe", 404);
-      if (s.estado !== "DECIDIDA") {
-        throw new AppError(
-          ["EN_FIRMAS", "AUTORIZADA", "NO_AUTORIZADA"].includes(s.estado)
-            ? "La orden de compra de esta solicitud ya se envió"
-            : "Solo se envía la orden de compra cuando Compras ya decidió la opción",
-          409,
-        );
-      }
-      if (!s.opcion_elegida_id || s.monto == null) throw new AppError("La solicitud no tiene opción decidida", 409);
-
-      const esGerente = s.gerente_id === usuario.id;
-      if (!esGerente && !s.gerente_id) {
-        throw new AppError("Tu área no tiene gerente registrado: nadie podría firmar la orden. Avísale al administrador.", 409);
-      }
-
-      let firma = null;
-      if (esGerente) {
-        if (!pin) throw new AppError("Eres el gerente del área: confirma la orden con tu PIN de firma", 400);
-        firma = await Firma.verificar(usuario.id, pin, cliente);
-      }
-
+      const s = await this.tomarParaAlta(cliente, solicitudId, usuario);
       const { rows: o } = await cliente.query(
-        `INSERT INTO compras_ordenes (solicitud_id, paso, opcion_id, proveedor, monto, moneda, incluye_iva, comentario, enviada_por)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING id`,
-        [solicitudId, esGerente ? "COMPRAS" : "GERENTE", s.opcion_elegida_id, s.proveedor, s.monto, s.moneda_elegida,
-          Boolean(s.incluye_iva), nota, usuario.id],
+        `INSERT INTO compras_ordenes (solicitud_id, paso, proveedor, monto, moneda, incluye_iva, comentario, enviada_por)
+         VALUES ($1, 'GERENTE', $2, $3, $4, false, $5, $6) RETURNING id`,
+        [solicitudId, proveedor, redondo(monto), moneda, nota, usuario.id],
       );
       const ordenId = o[0].id;
-      if (firma) {
+      for (const a of archivos) {
         await cliente.query(
-          `INSERT INTO compras_orden_firmas (orden_id, paso, usuario_id, firma_id, como) VALUES ($1, 'GERENTE', $2, $3, 'PROPIA')`,
-          [ordenId, usuario.id, firma.id],
+          `INSERT INTO compras_orden_archivos (orden_id, nombre_original, ruta, tipo_mime, tamano_bytes, subido_por)
+           VALUES ($1, $2, $3, $4, $5, $6)`,
+          [ordenId, a.nombreOriginal, a.ruta, a.tipoMime, a.tamanoBytes, usuario.id],
         );
       }
       await cliente.query("UPDATE compras_solicitudes SET estado = 'EN_FIRMAS' WHERE id = $1", [solicitudId]);
       await evento(cliente, {
         solicitudId,
-        tipo: "OC_ENVIADA",
+        tipo: "OC_ALTA",
         usuarioId: usuario.id,
-        como: esGerente ? "PROPIA" : null,
-        detalle: `${s.proveedor} · ${dinero(s.monto, s.moneda_elegida)}${s.incluye_iva ? " con IVA" : " + IVA"}${nota ? ` — ${nota}` : ""}`,
+        detalle: `${proveedor} · ${dinero(redondo(monto), moneda)} sin IVA${nota ? ` — ${nota}` : ""}`,
       });
       await cliente.query("COMMIT");
-      return { id: ordenId, solicitudId, folio: s.folio, paso: esGerente ? "COMPRAS" : "GERENTE", firmada: Boolean(firma) };
+      return { id: ordenId, solicitudId, folio: s.folio };
     } catch (e) {
       await cliente.query("ROLLBACK");
-      if (e.code === "23505") throw new AppError("La orden de compra de esta solicitud ya se envió", 409);
+      if (e.code === "23505") throw new AppError("Esta solicitud ya tiene orden de compra", 409);
       throw e;
     } finally {
       cliente.release();
     }
+  }
+
+  /** Los archivos de la cotización de una orden. */
+  static async archivos(ordenId) {
+    const { rows } = await db.query(
+      `SELECT a.id, a.nombre_original, a.tipo_mime, a.tamano_bytes, ${F("a.subido_en")} AS subido_en
+         FROM compras_orden_archivos a WHERE a.orden_id = $1 ORDER BY a.id`,
+      [ordenId],
+    );
+    return rows;
+  }
+
+  /** Un archivo de la cotización, si el usuario puede ver la orden. */
+  static async archivo(ordenId, archivoId, usuario) {
+    await this.verificarAcceso(ordenId, usuario);
+    const { rows } = await db.query(
+      "SELECT nombre_original, ruta, tipo_mime FROM compras_orden_archivos WHERE id = $1 AND orden_id = $2",
+      [archivoId, ordenId],
+    );
+    if (!rows[0]) throw new AppError("El archivo no existe", 404);
+    return rows[0];
   }
 
   // =========================================================================
@@ -270,9 +385,9 @@ class CompraOrden {
     const params = [usuario.id];
     if (vista === "por-firmar") {
       params.push(papeles);
-      where = `o.estado = 'EN_FIRMAS' AND s.solicitante_id <> $1
-               AND ((o.paso = 'GERENTE' AND (ca.gerente_id = $1 OR ca.suplente_id = $1))
-                    OR (o.paso <> 'GERENTE' AND o.paso = ANY($2)))`;
+      where = `o.estado = 'EN_FIRMAS'
+               AND ((o.paso = 'GERENTE' AND (ca.gerente_id = $1 OR (ca.suplente_id = $1 AND s.solicitante_id <> $1)))
+                    OR (o.paso <> 'GERENTE' AND o.paso = ANY($2) AND s.solicitante_id <> $1))`;
       orden = "o.enviada_en ASC";
     } else if (vista === "firmadas") {
       where = `(EXISTS (SELECT 1 FROM compras_orden_firmas f WHERE f.orden_id = o.id AND f.usuario_id = $1)
@@ -301,9 +416,9 @@ class CompraOrden {
          FROM compras_ordenes o
          JOIN compras_solicitudes s ON s.id = o.solicitud_id
          JOIN compras_areas ca ON ca.id = s.compras_area_id
-        WHERE o.estado = 'EN_FIRMAS' AND s.solicitante_id <> $1
-          AND ((o.paso = 'GERENTE' AND (ca.gerente_id = $1 OR ca.suplente_id = $1))
-               OR (o.paso <> 'GERENTE' AND o.paso = ANY($2)))`,
+        WHERE o.estado = 'EN_FIRMAS'
+          AND ((o.paso = 'GERENTE' AND (ca.gerente_id = $1 OR (ca.suplente_id = $1 AND s.solicitante_id <> $1)))
+               OR (o.paso <> 'GERENTE' AND o.paso = ANY($2) AND s.solicitante_id <> $1))`,
       [usuario.id, papeles],
     );
     return rows[0].n;
@@ -335,11 +450,31 @@ class CompraOrden {
     }));
   }
 
-  /** La orden de una solicitud, para la pantalla de Solicitudes (resumen y firmas). */
-  static async deSolicitud(solicitudId) {
+  /**
+   * La orden de una solicitud, para la pantalla de Solicitudes. Con montos para
+   * el gerente; para quien pidió, solo en qué firma va (sin proveedor, montos,
+   * tipo ni cuenta).
+   */
+  static async deSolicitud(solicitudId, { conMontos = false } = {}) {
     const { rows } = await db.query(`${SELECT_ORDEN} WHERE o.solicitud_id = $1`, [solicitudId]);
     if (!rows[0]) return null;
-    return { ...rows[0], firmas: await this.firmas(rows[0].id) };
+    const o = rows[0];
+    const firmas = await this.firmas(o.id);
+    if (conMontos) return { ...o, firmas, verPdf: true };
+    return {
+      id: o.id,
+      estado: o.estado,
+      paso: o.paso,
+      enviada_en: o.enviada_en,
+      terminada_en: o.terminada_en,
+      enviada_por_nombre: o.enviada_por_nombre,
+      requiere_direccion: o.requiere_direccion,
+      rechazada_paso: o.rechazada_paso,
+      rechazada_por_nombre: o.rechazada_por_nombre,
+      motivo_rechazo: o.motivo_rechazo,
+      firmas,
+      verPdf: false,
+    };
   }
 
   /**
@@ -347,35 +482,45 @@ class CompraOrden {
    * presupuesto del área, las firmas y, si le toca al usuario, las listas de
    * tipos o cuentas.
    */
-  static async obtener(ordenId, usuario) {
-    const { rows } = await db.query(`${SELECT_ORDEN} WHERE o.id = $1`, [ordenId]);
-    const o = rows[0];
+  /**
+   * ¿Puede el usuario ver la orden (con proveedor y monto)? El gerente y su
+   * suplente, quien firma, quien la dio de alta, quien ve todas y, ya
+   * autorizada, quien lee Formatos. Quien solo la pidió, no.
+   */
+  static async verificarAcceso(ordenId, usuario, o = null) {
+    if (!o) {
+      const { rows } = await db.query(`${SELECT_ORDEN} WHERE o.id = $1`, [ordenId]);
+      o = rows[0];
+    }
     if (!o) throw new AppError("La orden no existe", 404);
-
     const papeles = await papelesDe(usuario.id);
     const { rows: firmo } = await db.query(
       "SELECT 1 FROM compras_orden_firmas WHERE orden_id = $1 AND usuario_id = $2",
-      [ordenId, usuario.id],
+      [o.id, usuario.id],
     );
     const puedeVer =
-      [o.solicitante_id, o.gerente_id, o.suplente_id].includes(usuario.id) ||
+      [o.gerente_id, o.suplente_id, o.enviada_por].includes(usuario.id) ||
       papeles.size > 0 ||
       firmo.length > 0 ||
       (await verTodas(usuario)) ||
       (o.estado === "AUTORIZADA" && (await leeFormatos(usuario)));
     if (!puedeVer) throw new AppError("La orden no existe", 404);
+    return { o, papeles };
+  }
+
+  static async obtener(ordenId, usuario) {
+    const { rows } = await db.query(`${SELECT_ORDEN} WHERE o.id = $1`, [ordenId]);
+    const { o, papeles } = await this.verificarAcceso(ordenId, usuario, rows[0]);
 
     const turno = puedeFirmar(usuario, o, papeles);
-    const Cotizacion = require("./CompraCotizacion");
-    const { rows: cot } = await db.query("SELECT cotizacion_id FROM compras_cotizacion_opciones WHERE id = $1", [o.opcion_id]);
 
-    const [firmas, cotizacion, saldo, catalogos, iva, tc] = await Promise.all([
+    const [firmas, saldo, catalogos, iva, tc, archivos] = await Promise.all([
       this.firmas(ordenId),
-      cot[0] ? Cotizacion.completa(cot[0].cotizacion_id) : null,
       Presupuesto.saldoActual(o.compras_area_id),
       turno.puede && ["COMPRAS", "FINANZAS"].includes(o.paso) ? this.catalogos() : null,
       Presupuesto.ivaTasa(),
       tipoCambio.ultimo(),
+      this.archivos(ordenId),
     ]);
 
     // Cuánto descontaría hoy (mientras no se autoriza) o cuánto descontó
@@ -403,7 +548,7 @@ class CompraOrden {
       generado_en: cfg[0]?.ahora,
       ...o,
       firmas,
-      cotizacion,
+      archivos,
       presupuesto,
       catalogos,
       montoMinimoDireccion: o.monto_minimo_direccion ?? cfg[0]?.minimo ?? 0,
