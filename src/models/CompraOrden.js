@@ -395,6 +395,8 @@ class CompraOrden {
     } else if (vista === "todas") {
       if (!(await verTodas(usuario))) throw new AppError("No tienes permiso para ver todas las órdenes", 403);
       where = "true";
+      // Aquí no se filtra por usuario: sin parámetros (Postgres no acepta uno de más)
+      params.length = 0;
     } else {
       throw new AppError(`Vista no válida: "${vista}"`, 400);
     }
