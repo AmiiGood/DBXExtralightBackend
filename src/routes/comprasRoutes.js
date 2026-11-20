@@ -227,10 +227,17 @@ router.get("/ordenes/alta/:solicitudId", authenticate, ordenes.getParaAlta);
 router.get("/ordenes/alta/:solicitudId/archivos/:archivoId", authenticate, ordenes.getArchivoSolicitud);
 
 /**
- * @route   POST /api/compras/ordenes/alta/:solicitudId
- * @desc    Da de alta la orden (multipart: proveedor, monto, moneda, comentario, archivos[])
+ * @route   POST /api/compras/ordenes/alta
+ * @desc    Registra la cotización ganadora de uno o varios tickets: una orden por
+ *          ticket con sus renglones (multipart: datos JSON y archivos[])
  */
-router.post("/ordenes/alta/:solicitudId", authenticate, recibirArchivos, ordenes.postAlta);
+router.post("/ordenes/alta", authenticate, recibirArchivos, ordenes.postAlta);
+
+/**
+ * @route   POST /api/compras/ordenes/firmar-lote
+ * @desc    Firma varias órdenes del mismo paso con un solo PIN
+ */
+router.post("/ordenes/firmar-lote", authenticate, ordenes.postFirmarLote);
 
 /**
  * @route   GET /api/compras/ordenes?vista=por-firmar|firmadas|todas

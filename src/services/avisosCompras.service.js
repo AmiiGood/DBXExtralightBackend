@@ -485,6 +485,27 @@ function fichaOrden(s, o, { conMontos = true } = {}) {
  * Después de enviar, firmar o rechazar una orden: a quien le toca firmar, o a
  * quien pidió y a Compras cuando termina (autorizada o rechazada).
  */
+/**
+ * Quiénes pueden firmar el paso en que va una orden: el gerente (aunque la haya
+ * pedido él) y el suplente que no la pidió; en los demás pasos, la lista de
+ * firmantes menos quien la pidió.
+ */
+async function firmantesDe(s, o) {
+  const { rows } =
+    o.paso === "GERENTE"
+      ? await db.query(`SELECT id, email FROM usuarios WHERE activo AND (id = $1 OR (id = $2 AND id <> $3))`, [
+          s.gerente_id,
+          s.suplente_id,
+          s.solicitante_id,
+        ])
+      : await db.query(
+          `SELECT u.id, u.email FROM compras_firmantes f JOIN usuarios u ON u.id = f.usuario_id
+            WHERE f.papel = $1 AND u.activo AND u.id <> $2`,
+          [o.paso, s.solicitante_id],
+        );
+  return rows;
+}
+
 async function avisarOrden(solicitudId) {
   const s = await datosSolicitud(solicitudId);
   const o = await datosOrden(solicitudId);
@@ -492,17 +513,7 @@ async function avisarOrden(solicitudId) {
 
   if (o.estado === "EN_FIRMAS") {
     if (!(await avisosEncendidos(true))) return;
-    const { rows: firmantes } =
-      o.paso === "GERENTE"
-        ? await db.query(`SELECT id, email FROM usuarios WHERE id = ANY($1) AND activo AND id <> $2`, [
-            [s.gerente_id, s.suplente_id].filter(Boolean),
-            s.solicitante_id,
-          ])
-        : await db.query(
-            `SELECT u.id, u.email FROM compras_firmantes f JOIN usuarios u ON u.id = f.usuario_id
-              WHERE f.papel = $1 AND u.activo AND u.id <> $2`,
-            [o.paso, s.solicitante_id],
-          );
+    const firmantes = await firmantesDe(s, o);
     const que = { COMPRAS: " y pon el tipo", FINANZAS: " y pon la cuenta y el centro de costos" }[o.paso] || "";
     for (const u of firmantes) {
       await mandar({
@@ -561,6 +572,99 @@ async function avisarOrden(solicitudId) {
     });
   }
   if (autorizada) await avisarSobregiro(solicitudId);
+}
+
+/**
+ * Después de un alta o una firma en lote: a cada quien que le toca firmar le
+ * llega UN correo con todas sus órdenes, no uno por orden. Las que terminaron
+ * (autorizadas o rechazadas) avisan una por una, como siempre.
+ */
+async function avisarOrdenes(solicitudIds = []) {
+  const ids = [...new Set(solicitudIds)];
+  if (ids.length === 1) return avisarOrden(ids[0]);
+  const enFirmas = [];
+  for (const id of ids) {
+    const o = await datosOrden(id);
+    if (!o) continue;
+    if (o.estado === "EN_FIRMAS") enFirmas.push({ s: await datosSolicitud(id), o });
+    else await avisarOrden(id);
+  }
+  if (!enFirmas.length || !(await avisosEncendidos(true))) return;
+
+  const porUsuario = new Map();
+  for (const x of enFirmas) {
+    for (const u of await firmantesDe(x.s, x.o)) {
+      if (!porUsuario.has(u.id)) porUsuario.set(u.id, { usuario: u, lista: [] });
+      porUsuario.get(u.id).lista.push(x);
+    }
+  }
+  for (const { usuario, lista } of porUsuario.values()) {
+    if (lista.length === 1) {
+      await avisarOrdenA(usuario, lista[0]);
+      continue;
+    }
+    const celda = "padding:6px 10px;border-bottom:1px solid #f0f0f0";
+    const filas = lista
+      .map(
+        ({ s, o }) => `
+        <tr>
+          <td style="${celda};white-space:nowrap"><a href="${escapar(enlaceOrdenes({ id: o.id }))}" style="color:#236093">${escapar(s.osticket_numero || s.folio)}</a></td>
+          <td style="${celda}">${escapar(recortar(s.asunto, 60))}<br /><span style="color:#9ca3af;font-size:12px">${escapar(s.solicitante)} · ${escapar(s.area)}</span></td>
+          <td style="${celda}">${escapar(recortar(o.proveedor, 50))}</td>
+          <td style="${celda};text-align:right;white-space:nowrap">${dinero(o.monto, o.moneda)}</td>
+        </tr>`,
+      )
+      .join("");
+    const n = lista.length;
+    const paso = lista[0].o.paso;
+    const total = lista.every((x) => x.o.moneda === lista[0].o.moneda)
+      ? dinero(lista.reduce((t, x) => t + x.o.monto, 0), lista[0].o.moneda)
+      : null;
+    await mandar({
+      tipo: "OC_POR_FIRMAR",
+      solicitudId: lista[0].s.id,
+      usuario,
+      asunto: `${n} órdenes de compra por firmar${total ? ` · ${total} sin IVA` : ""}`,
+      html: plantilla({
+        titulo: `Tienes ${n} órdenes de compra por firmar`,
+        subtitulo: lista.every((x) => x.o.paso === paso) ? `Firmas como ${PASO_TEXTO[paso]}` : null,
+        cuerpo: `
+          <table style="border-collapse:collapse;width:100%;font-size:14px">
+            <thead>
+              <tr style="background:#236093;color:#fff">
+                <th style="padding:8px 10px;text-align:left">Ticket</th>
+                <th style="padding:8px 10px;text-align:left">Asunto</th>
+                <th style="padding:8px 10px;text-align:left">Proveedor</th>
+                <th style="padding:8px 10px;text-align:right">Monto sin IVA</th>
+              </tr>
+            </thead>
+            <tbody>${filas}</tbody>
+          </table>
+          <p style="font-size:14px;color:#6b7280">Puedes firmarlas juntas con tu PIN desde Órdenes de compra → Por firmar.</p>`,
+        boton: { texto: "Revisar y firmar", url: enlaceOrdenes() },
+      }),
+      texto: `Tienes ${n} órdenes de compra por firmar: ${enlaceOrdenes()}`,
+    });
+  }
+}
+
+/** El correo de "por firmar" de una sola orden a una persona. */
+async function avisarOrdenA(u, { s, o }) {
+  const que = { COMPRAS: " y pon el tipo", FINANZAS: " y pon la cuenta y el centro de costos" }[o.paso] || "";
+  await mandar({
+    tipo: "OC_POR_FIRMAR",
+    solicitudId: s.id,
+    usuario: u,
+    asunto: `Orden de compra por firmar: ${s.folio} · ${o.proveedor} · ${dinero(o.monto, o.moneda)}`,
+    html: plantilla({
+      titulo: "Tienes una orden de compra por firmar",
+      subtitulo: `Firmas como ${PASO_TEXTO[o.paso]}`,
+      cuerpo: `${fichaOrden(s, o)}
+        <p style="font-size:14px;color:#6b7280">Revísala${que}. Firmas con tu PIN; si no procede, recházala con el motivo.</p>`,
+      boton: { texto: "Revisar y firmar", url: enlaceOrdenes({ id: o.id }) },
+    }),
+    texto: `Orden de compra por firmar: ${s.folio} (${o.proveedor}, ${dinero(o.monto, o.moneda)}). ${enlaceOrdenes({ id: o.id })}`,
+  });
 }
 
 /**
@@ -726,6 +830,7 @@ module.exports = {
   avisarEnCompras,
   avisarSobregiro,
   avisarOrden,
+  avisarOrdenes,
   mandarRecordatorios,
   mandarPrueba,
   ultimosCorreos,

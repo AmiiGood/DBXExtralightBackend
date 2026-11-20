@@ -86,18 +86,34 @@ const getArchivoSolicitud = catchAsync(async (req, res) => {
 });
 
 /**
- * POST /api/compras/ordenes/alta/:solicitudId
- * multipart: proveedor, monto (sin IVA), moneda, comentario, archivos[] (la cotización, obligatoria)
+ * POST /api/compras/ordenes/alta
+ * multipart: datos (JSON: { solicitudIds, moneda, comentario, lineas: [...] }) y
+ * archivos[] (la cotización y el comparativo, obligatorios). Una orden por ticket.
  */
 const postAlta = catchAsync(async (req, res) => {
   const files = req.files || [];
   try {
     const demasiado = archivosCompras.excedeTotal(files);
     if (demasiado) throw new AppError(demasiado, 400);
-    const r = await Orden.darDeAlta(idDe(req.params.solicitudId), req.usuario, req.body || {}, archivosCompras.describir(files));
-    await log(req, "CREATE", `Dio de alta la orden de compra de ${r.folio}`, r.id);
-    avisos.enSegundoPlano(avisos.avisarOrden, r.solicitudId);
-    sendSuccess(res, 201, r, `Orden de compra de ${r.folio} dada de alta. Ahora la firma el gerente del área.`);
+    let datos;
+    try {
+      datos = JSON.parse(req.body?.datos || "{}");
+    } catch {
+      throw new AppError("Los datos de la cotización no vienen bien", 400);
+    }
+    const r = await Orden.darDeAltaLote(req.usuario, datos, archivosCompras.describir(files));
+    const tickets = r.ordenes.map((o) => o.ticket || o.folio).join(", ");
+    await log(req, "CREATE", `Registró la cotización ganadora de ${tickets}`, r.ordenes[0]?.id);
+    avisos.enSegundoPlano(avisos.avisarOrdenes, r.ordenes.map((o) => o.solicitudId));
+    const n = r.ordenes.length;
+    sendSuccess(
+      res,
+      201,
+      r,
+      n === 1
+        ? `Orden de compra de ${tickets} dada de alta. Ahora la firma el gerente del área.`
+        : `${n} órdenes de compra dadas de alta (${tickets}). Ahora las firma el gerente de cada área.`,
+    );
   } catch (e) {
     archivosCompras.borrar(files);
     throw e;
@@ -148,6 +164,22 @@ const postFirmar = catchAsync(async (req, res) => {
   );
 });
 
+/** POST /api/compras/ordenes/firmar-lote   { ordenIds, pin, tipo?, cuenta?, centroCostos?, comentario? } */
+const postFirmarLote = catchAsync(async (req, res) => {
+  const r = await Orden.firmarLote(req.body?.ordenIds, req.usuario, req.body || {});
+  const folios = r.firmadas.map((f) => f.folio).join(", ");
+  await log(req, "UPDATE", `Firmó por ${PASO[r.paso]} las órdenes de compra de ${folios}`, r.firmadas[0]?.id);
+  avisos.enSegundoPlano(avisos.avisarOrdenes, r.firmadas.map((f) => f.solicitudId));
+  const autorizadas = r.firmadas.filter((f) => f.autorizada).length;
+  const n = r.firmadas.length;
+  sendSuccess(
+    res,
+    200,
+    r,
+    `Firmaste ${n} ${n === 1 ? "orden" : "órdenes"}.${autorizadas ? ` ${autorizadas} quedó${autorizadas === 1 ? "" : "aron"} autorizada${autorizadas === 1 ? "" : "s"}.` : ""}`,
+  );
+});
+
 /** POST /api/compras/ordenes/:id/rechazar   { motivo } */
 const postRechazar = catchAsync(async (req, res) => {
   const r = await Orden.rechazar(idDe(req.params.id), req.usuario, req.body || {});
@@ -178,6 +210,7 @@ module.exports = {
   getArchivo,
   getPdf,
   postFirmar,
+  postFirmarLote,
   postRechazar,
   getFirmantes,
   putFirmantes,

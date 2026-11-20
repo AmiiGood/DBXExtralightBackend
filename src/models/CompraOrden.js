@@ -128,7 +128,8 @@ const SELECT_ORDEN = `
          o.monto_mxn_sin_iva::float AS monto_mxn_sin_iva,
          ${F("o.enviada_en")} AS enviada_en, ${F("o.terminada_en")} AS terminada_en,
          o.rechazada_paso, o.motivo_rechazo, ur.nombre_completo AS rechazada_por_nombre,
-         o.enviada_por, ue.nombre_completo AS enviada_por_nombre,
+         o.enviada_por, ue.nombre_completo AS enviada_por_nombre, o.envio_id,
+         (SELECT count(*)::int FROM compras_ordenes oe WHERE oe.envio_id = o.envio_id) AS ordenes_del_envio,
          s.folio, s.asunto, s.detalle, s.osticket_numero, s.asignado_nombre, s.solicitante_id,
          s.compras_area_id, s.monto_presupuesto::float AS monto_presupuesto,
          ca.nombre AS area_nombre, ca.gerente_id, ca.suplente_id,
@@ -237,24 +238,25 @@ class CompraOrden {
   static async tomarParaAlta(cliente, solicitudId, usuario) {
     const a = await this.alcanceAlta(usuario);
     const { rows } = await cliente.query(
-      `SELECT s.id, s.folio, s.estado, s.asignado_email, s.solicitante_id, ca.gerente_id
+      `SELECT s.id, s.folio, s.osticket_numero, s.estado, s.asignado_email, s.solicitante_id, ca.gerente_id
          FROM compras_solicitudes s JOIN compras_areas ca ON ca.id = s.compras_area_id
         WHERE s.id = $1 FOR UPDATE OF s`,
       [solicitudId],
     );
     const s = rows[0];
     const leToca = s && (a.todas || (a.correo && s.asignado_email === a.correo));
-    if (!s || !a.crear || !leToca) throw new AppError("La solicitud no existe", 404);
+    if (!s || !a.crear || !leToca) throw new AppError("Uno de los tickets no existe o no lo tienes asignado", 404);
+    const quien = s.osticket_numero || s.folio;
     if (s.estado !== "EN_COMPRAS") {
       throw new AppError(
         ["EN_FIRMAS", "AUTORIZADA", "NO_AUTORIZADA"].includes(s.estado)
-          ? "Esta solicitud ya tiene orden de compra"
-          : "Esta solicitud todavía no está en Compras",
+          ? `${quien} ya tiene orden de compra`
+          : `${quien} todavía no está en Compras`,
         409,
       );
     }
     if (!s.gerente_id) {
-      throw new AppError("El área de esta solicitud no tiene gerente: nadie podría firmar la orden. Avísale al administrador.", 409);
+      throw new AppError(`El área de ${quien} no tiene gerente: nadie podría firmar la orden. Avísale al administrador.`, 409);
     }
     return s;
   }
@@ -299,55 +301,128 @@ class CompraOrden {
   }
 
   /**
-   * Compras da de alta la orden de compra: proveedor, monto sin IVA, moneda y
-   * el archivo de la cotización (obligatorio). Pasa a firmas del gerente.
+   * Compras registra la cotización ganadora de uno o varios tickets a la vez
+   * (20-nov-2026): la cotización y el comparativo se suben una vez y la tabla
+   * de ganadores trae, por renglón, el ticket, la cantidad, la descripción, el
+   * proveedor y el precio unitario sin IVA. Se crea una orden por ticket con sus
+   * renglones (cada ticket puede tener varios proveedores) y todas pasan a la
+   * firma del gerente de su área.
    *
+   * @param {Object}   datos     { solicitudIds: [], moneda, comentario,
+   *                               lineas: [{ solicitudId, cantidad, unidad, descripcion, proveedor, precio, motivo }] }
    * @param {Object[]} archivos  ya en disco (comprasArchivos.describir); si algo
    *                             falla aquí, quien llama los borra
    */
-  static async darDeAlta(solicitudId, usuario, datos = {}, archivos = []) {
-    const proveedor = String(datos.proveedor ?? "").replace(/\s+/g, " ").trim();
-    if (!proveedor) throw new AppError("Escribe el proveedor", 400);
-    if (proveedor.length > 200) throw new AppError("El nombre del proveedor es demasiado largo (máximo 200)", 400);
-    const monto = Number(String(datos.monto ?? "").replace(/[$,\s]/g, ""));
-    if (!Number.isFinite(monto) || monto <= 0) throw new AppError("Escribe el monto sin IVA", 400);
+  static async darDeAltaLote(usuario, datos = {}, archivos = []) {
     const moneda = datos.moneda === "USD" ? "USD" : "MXN";
     const nota = texto(datos.comentario, 1000);
+    const ids = [...new Set((datos.solicitudIds || []).map(Number))].filter((n) => Number.isInteger(n) && n > 0);
+    if (!ids.length) throw new AppError("Escoge al menos un ticket", 400);
+    if (ids.length > 30) throw new AppError("Máximo 30 tickets por registro", 400);
     if (!archivos.length) throw new AppError("Adjunta la cotización del proveedor (PDF, imagen o Excel)", 400);
+    const lineas = Array.isArray(datos.lineas) ? datos.lineas : [];
+    if (!lineas.length) throw new AppError("Pega la tabla de cotizaciones ganadoras", 400);
+    if (lineas.length > 300) throw new AppError("Máximo 300 renglones por registro", 400);
+
+    const limpias = lineas.map((l, i) => {
+      const n = i + 1;
+      const solicitudId = Number(l.solicitudId);
+      if (!ids.includes(solicitudId)) throw new AppError(`El renglón ${n} no es de ninguno de los tickets escogidos`, 400);
+      const cantidad = Number(String(l.cantidad ?? "").replace(/[,\s]/g, ""));
+      if (!Number.isFinite(cantidad) || cantidad <= 0) throw new AppError(`El renglón ${n} no tiene cantidad`, 400);
+      const descripcion = String(l.descripcion ?? "").trim();
+      if (!descripcion) throw new AppError(`El renglón ${n} no tiene descripción`, 400);
+      if (descripcion.length > 2000) throw new AppError(`La descripción del renglón ${n} es demasiado larga`, 400);
+      const proveedor = String(l.proveedor ?? "").replace(/\s+/g, " ").trim();
+      if (!proveedor) throw new AppError(`El renglón ${n} no tiene proveedor`, 400);
+      if (proveedor.length > 200) throw new AppError(`El proveedor del renglón ${n} es demasiado largo`, 400);
+      const precio = Number(String(l.precio ?? "").replace(/[$,\s]/g, ""));
+      if (!Number.isFinite(precio) || precio < 0) throw new AppError(`El renglón ${n} no tiene precio unitario`, 400);
+      const unidad = String(l.unidad ?? "").trim().slice(0, 20) || null;
+      return {
+        solicitudId,
+        cantidad,
+        unidad,
+        descripcion,
+        proveedor,
+        precio,
+        importe: redondo(cantidad * precio),
+        motivo: texto(l.motivo, 1000),
+      };
+    });
 
     const cliente = await db.pool.connect();
     try {
       await cliente.query("BEGIN");
-      const s = await this.tomarParaAlta(cliente, solicitudId, usuario);
-      const { rows: o } = await cliente.query(
-        `INSERT INTO compras_ordenes (solicitud_id, paso, proveedor, monto, moneda, incluye_iva, comentario, enviada_por)
-         VALUES ($1, 'GERENTE', $2, $3, $4, false, $5, $6) RETURNING id`,
-        [solicitudId, proveedor, redondo(monto), moneda, nota, usuario.id],
+      const { rows: env } = await cliente.query(
+        "INSERT INTO compras_orden_envios (moneda, comentario, creado_por) VALUES ($1, $2, $3) RETURNING id",
+        [moneda, nota, usuario.id],
       );
-      const ordenId = o[0].id;
-      for (const a of archivos) {
-        await cliente.query(
-          `INSERT INTO compras_orden_archivos (orden_id, nombre_original, ruta, tipo_mime, tamano_bytes, subido_por)
-           VALUES ($1, $2, $3, $4, $5, $6)`,
-          [ordenId, a.nombreOriginal, a.ruta, a.tipoMime, a.tamanoBytes, usuario.id],
+      const envioId = env[0].id;
+      const ordenes = [];
+      // En orden de id: dos registros a la vez no se bloquean entre sí
+      for (const solicitudId of [...ids].sort((a, b) => a - b)) {
+        const s = await this.tomarParaAlta(cliente, solicitudId, usuario);
+        const suyas = limpias.filter((l) => l.solicitudId === solicitudId);
+        if (!suyas.length) throw new AppError(`${s.osticket_numero || s.folio} no tiene renglones en la tabla`, 400);
+        const monto = redondo(suyas.reduce((t, l) => t + l.importe, 0));
+        if (!(monto > 0)) throw new AppError(`${s.osticket_numero || s.folio} suma $0`, 400);
+        const proveedores = [...new Set(suyas.map((l) => l.proveedor))];
+        const proveedor = (proveedores.length === 1 ? proveedores[0] : `Varios: ${proveedores.join(", ")}`).slice(0, 200);
+
+        const { rows: o } = await cliente.query(
+          `INSERT INTO compras_ordenes (solicitud_id, paso, proveedor, monto, moneda, incluye_iva, comentario, enviada_por, envio_id)
+           VALUES ($1, 'GERENTE', $2, $3, $4, false, $5, $6, $7) RETURNING id`,
+          [solicitudId, proveedor, monto, moneda, nota, usuario.id, envioId],
         );
+        const ordenId = o[0].id;
+        let k = 0;
+        for (const l of suyas) {
+          await cliente.query(
+            `INSERT INTO compras_orden_lineas (orden_id, orden, cantidad, unidad, descripcion, proveedor, precio_unitario, importe, motivo)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+            [ordenId, k++, l.cantidad, l.unidad, l.descripcion, l.proveedor, l.precio, l.importe, l.motivo],
+          );
+        }
+        // La misma cotización le queda a cada orden (el archivo está una vez en disco)
+        for (const a of archivos) {
+          await cliente.query(
+            `INSERT INTO compras_orden_archivos (orden_id, nombre_original, ruta, tipo_mime, tamano_bytes, subido_por)
+             VALUES ($1, $2, $3, $4, $5, $6)`,
+            [ordenId, a.nombreOriginal, a.ruta, a.tipoMime, a.tamanoBytes, usuario.id],
+          );
+        }
+        await cliente.query("UPDATE compras_solicitudes SET estado = 'EN_FIRMAS' WHERE id = $1", [solicitudId]);
+        await evento(cliente, {
+          solicitudId,
+          tipo: "OC_ALTA",
+          usuarioId: usuario.id,
+          detalle: `${proveedor} · ${dinero(monto, moneda)} sin IVA · ${suyas.length} ${suyas.length === 1 ? "renglón" : "renglones"}${
+            ids.length > 1 ? ` (junto con ${ids.length - 1} ticket${ids.length === 2 ? "" : "s"} más)` : ""
+          }${nota ? ` — ${nota}` : ""}`,
+        });
+        ordenes.push({ id: ordenId, solicitudId, folio: s.folio, ticket: s.osticket_numero, monto, proveedor });
       }
-      await cliente.query("UPDATE compras_solicitudes SET estado = 'EN_FIRMAS' WHERE id = $1", [solicitudId]);
-      await evento(cliente, {
-        solicitudId,
-        tipo: "OC_ALTA",
-        usuarioId: usuario.id,
-        detalle: `${proveedor} · ${dinero(redondo(monto), moneda)} sin IVA${nota ? ` — ${nota}` : ""}`,
-      });
       await cliente.query("COMMIT");
-      return { id: ordenId, solicitudId, folio: s.folio };
+      return { envioId, ordenes };
     } catch (e) {
       await cliente.query("ROLLBACK");
-      if (e.code === "23505") throw new AppError("Esta solicitud ya tiene orden de compra", 409);
+      if (e.code === "23505") throw new AppError("Uno de los tickets ya tiene orden de compra", 409);
       throw e;
     } finally {
       cliente.release();
     }
+  }
+
+  /** Los renglones de una orden: lo que se compra y a quién. */
+  static async lineas(ordenId) {
+    const { rows } = await db.query(
+      `SELECT id, cantidad::float AS cantidad, unidad, descripcion, proveedor,
+              precio_unitario::float AS precio_unitario, importe::float AS importe, motivo
+         FROM compras_orden_lineas WHERE orden_id = $1 ORDER BY orden, id`,
+      [ordenId],
+    );
+    return rows;
   }
 
   /** Los archivos de la cotización de una orden. */
@@ -462,7 +537,7 @@ class CompraOrden {
     if (!rows[0]) return null;
     const o = rows[0];
     const firmas = await this.firmas(o.id);
-    if (conMontos) return { ...o, firmas, verPdf: true };
+    if (conMontos) return { ...o, firmas, lineas: await this.lineas(o.id), verPdf: true };
     return {
       id: o.id,
       estado: o.estado,
@@ -516,13 +591,14 @@ class CompraOrden {
 
     const turno = puedeFirmar(usuario, o, papeles);
 
-    const [firmas, saldo, catalogos, iva, tc, archivos] = await Promise.all([
+    const [firmas, saldo, catalogos, iva, tc, archivos, lineas] = await Promise.all([
       this.firmas(ordenId),
       Presupuesto.saldoActual(o.compras_area_id),
       turno.puede && ["COMPRAS", "FINANZAS"].includes(o.paso) ? this.catalogos() : null,
       Presupuesto.ivaTasa(),
       tipoCambio.ultimo(),
       this.archivos(ordenId),
+      this.lineas(ordenId),
     ]);
 
     // Cuánto descontaría hoy (mientras no se autoriza) o cuánto descontó
@@ -551,6 +627,7 @@ class CompraOrden {
       ...o,
       firmas,
       archivos,
+      lineas,
       presupuesto,
       catalogos,
       montoMinimoDireccion: o.monto_minimo_direccion ?? cfg[0]?.minimo ?? 0,
@@ -592,10 +669,10 @@ class CompraOrden {
     const o = rows[0];
     if (!o) throw new AppError("La orden no existe", 404);
     if (o.estado !== "EN_FIRMAS") {
-      throw new AppError(o.estado === "AUTORIZADA" ? "La orden ya quedó autorizada" : "La orden ya fue rechazada", 409);
+      throw new AppError(`${o.folio}: ${o.estado === "AUTORIZADA" ? "la orden ya quedó autorizada" : "la orden ya fue rechazada"}`, 409);
     }
     const turno = puedeFirmar(usuario, o, await papelesDe(usuario.id, cliente));
-    if (!turno.puede) throw new AppError(turno.porque, 403);
+    if (!turno.puede) throw new AppError(`${o.folio}: ${turno.porque}`, 403);
     return { o, como: turno.como };
   }
 
@@ -604,87 +681,121 @@ class CompraOrden {
    * @param {Object} d { pin, tipo (Compras), cuenta y centroCostos (Finanzas), comentario }
    */
   static async firmar(ordenId, usuario, d = {}) {
+    const r = await this.firmarLote([ordenId], usuario, d);
+    return r.firmadas[0];
+  }
+
+  /**
+   * Firma varias órdenes juntas con un solo PIN (20-nov-2026). Tienen que ir en
+   * el mismo paso; Compras les pone a todas el mismo tipo y Finanzas la misma
+   * cuenta y centro de costos. Todo o nada: si una ya no se puede firmar, no se
+   * firma ninguna.
+   *
+   * @param {Object} d { pin, tipo (Compras), cuenta y centroCostos (Finanzas), comentario }
+   */
+  static async firmarLote(ordenIds, usuario, d = {}) {
+    const ids = [...new Set((ordenIds || []).map(Number))].filter((n) => Number.isInteger(n) && n > 0).sort((a, b) => a - b);
+    if (!ids.length) throw new AppError("Escoge al menos una orden", 400);
+    if (ids.length > 50) throw new AppError("Máximo 50 órdenes a la vez", 400);
     const nota = texto(d.comentario, 1000);
     const cliente = await db.pool.connect();
     try {
       await cliente.query("BEGIN");
-      const { o, como } = await this.tomar(cliente, ordenId, usuario);
+      const tomadas = [];
+      for (const id of ids) tomadas.push(await this.tomar(cliente, id, usuario));
+      const paso = tomadas[0].o.paso;
+      if (tomadas.some((t) => t.o.paso !== paso)) {
+        throw new AppError("Las órdenes que firmas juntas tienen que ir en el mismo paso", 400);
+      }
 
       // Lo que pone cada quien, antes de pedir el PIN: si falta algo no gasta intento
-      const cambios = {};
-      if (o.paso === "COMPRAS") {
+      const comunes = {};
+      if (paso === "COMPRAS") {
         const tipo = String(d.tipo ?? "").replace(/\s+/g, " ").trim();
         if (!tipo) throw new AppError("Escoge el tipo de compra antes de firmar", 400);
         const { rows } = await cliente.query("SELECT nombre FROM compras_tipos WHERE activo AND lower(nombre) = lower($1)", [tipo]);
         if (!rows[0]) throw new AppError(`"${tipo}" no está en la lista de tipos`, 400);
-        cambios.clasif_tipo = rows[0].nombre;
+        comunes.clasif_tipo = rows[0].nombre;
       }
-      if (o.paso === "FINANZAS") {
+      if (paso === "FINANZAS") {
         const cuenta = String(d.cuenta ?? "").replace(/\D/g, "");
         if (!cuenta) throw new AppError("Escoge la cuenta antes de firmar", 400);
         const { rows } = await cliente.query("SELECT codigo FROM compras_cuentas WHERE activo AND codigo = $1", [cuenta]);
         if (!rows[0]) throw new AppError(`La cuenta ${cuenta} no está en la lista`, 400);
-        cambios.cuenta = cuenta;
-        cambios.centro_costos = texto(d.centroCostos, 60);
+        comunes.cuenta = cuenta;
+        comunes.centro_costos = texto(d.centroCostos, 60);
       }
 
       if (!d.pin) throw new AppError("Escribe tu PIN de firma", 400);
       const firma = await Firma.verificar(usuario.id, d.pin, cliente);
 
-      await cliente.query(
-        `INSERT INTO compras_orden_firmas (orden_id, paso, usuario_id, firma_id, como, comentario)
-         VALUES ($1, $2, $3, $4, $5, $6)`,
-        [ordenId, o.paso, usuario.id, firma.id, como, nota],
-      );
-
-      // ¿Qué sigue?
-      let siguiente = PASOS[PASOS.indexOf(o.paso) + 1] || null;
-      if (o.paso === "FINANZAS") {
-        const [{ rows: cfg }, iva, tc] = await Promise.all([
+      // Para Finanzas: el mínimo de Dirección y el tipo de cambio, una vez
+      let minimo = 0;
+      let iva = 0.16;
+      let tc = null;
+      if (paso === "FINANZAS") {
+        const [{ rows: cfg }, i, t] = await Promise.all([
           cliente.query("SELECT oc_monto_minimo_direccion::float AS minimo FROM compras_config WHERE id = 1"),
           Presupuesto.ivaTasa(cliente),
           tipoCambio.ultimo(),
         ]);
-        const minimo = cfg[0]?.minimo ?? 0;
-        const { monto } = Presupuesto.montoParaPresupuesto(
-          { total: o.monto, moneda: o.moneda, incluyeIva: o.incluye_iva },
-          { tc: tc?.valor, iva },
+        minimo = cfg[0]?.minimo ?? 0;
+        iva = i;
+        tc = t;
+      }
+
+      const firmadas = [];
+      for (const { o, como } of tomadas) {
+        await cliente.query(
+          `INSERT INTO compras_orden_firmas (orden_id, paso, usuario_id, firma_id, como, comentario)
+           VALUES ($1, $2, $3, $4, $5, $6)`,
+          [o.id, paso, usuario.id, firma.id, como, nota],
         );
-        // Sin tipo de cambio no se sabe si llega: mejor que firme Dirección
-        const requiere = minimo <= 0 || monto == null || monto >= minimo;
-        cambios.requiere_direccion = requiere;
-        cambios.monto_minimo_direccion = minimo;
-        cambios.monto_mxn_sin_iva = monto;
-        if (!requiere) siguiente = null;
-      }
 
-      const sets = Object.keys(cambios).map((k, i) => `${k} = $${i + 2}`);
-      if (sets.length) {
-        await cliente.query(`UPDATE compras_ordenes SET ${sets.join(", ")} WHERE id = $1`, [ordenId, ...Object.values(cambios)]);
-      }
+        const cambios = { ...comunes };
+        let siguiente = PASOS[PASOS.indexOf(paso) + 1] || null;
+        if (paso === "FINANZAS") {
+          const { monto } = Presupuesto.montoParaPresupuesto(
+            { total: o.monto, moneda: o.moneda, incluyeIva: o.incluye_iva },
+            { tc: tc?.valor, iva },
+          );
+          // Sin tipo de cambio no se sabe si llega: mejor que firme Dirección
+          const requiere = minimo <= 0 || monto == null || monto >= minimo;
+          cambios.requiere_direccion = requiere;
+          cambios.monto_minimo_direccion = minimo;
+          cambios.monto_mxn_sin_iva = monto;
+          if (!requiere) siguiente = null;
+        }
 
-      const detalle = [
-        cambios.clasif_tipo && `Tipo: ${cambios.clasif_tipo}`,
-        cambios.cuenta && `Cuenta: ${cambios.cuenta}${cambios.centro_costos ? ` · CC: ${cambios.centro_costos}` : ""}`,
-        o.paso === "FINANZAS" && !cambios.requiere_direccion &&
-          `Abajo del mínimo para Dirección (${dinero(cambios.monto_minimo_direccion, "MXN")})`,
-        nota,
-      ].filter(Boolean).join(" — ");
-      await evento(cliente, { solicitudId: o.solicitud_id, tipo: `OC_FIRMA_${o.paso}`, usuarioId: usuario.id, como, detalle: detalle || null });
+        const sets = Object.keys(cambios).map((k, i) => `${k} = $${i + 2}`);
+        if (sets.length) {
+          await cliente.query(`UPDATE compras_ordenes SET ${sets.join(", ")} WHERE id = $1`, [o.id, ...Object.values(cambios)]);
+        }
 
-      let autorizada = false;
-      if (siguiente) {
-        await cliente.query("UPDATE compras_ordenes SET paso = $2 WHERE id = $1", [ordenId, siguiente]);
-      } else {
-        await this.autorizar(cliente, o, usuario);
-        autorizada = true;
+        const detalle = [
+          cambios.clasif_tipo && `Tipo: ${cambios.clasif_tipo}`,
+          cambios.cuenta && `Cuenta: ${cambios.cuenta}${cambios.centro_costos ? ` · CC: ${cambios.centro_costos}` : ""}`,
+          paso === "FINANZAS" && !cambios.requiere_direccion && `Abajo del mínimo para Dirección (${dinero(cambios.monto_minimo_direccion, "MXN")})`,
+          ids.length > 1 && `Firmada junto con ${ids.length - 1} ${ids.length === 2 ? "orden" : "órdenes"} más`,
+          nota,
+        ].filter(Boolean).join(" — ");
+        await evento(cliente, { solicitudId: o.solicitud_id, tipo: `OC_FIRMA_${paso}`, usuarioId: usuario.id, como, detalle: detalle || null });
+
+        let autorizada = false;
+        if (siguiente) {
+          await cliente.query("UPDATE compras_ordenes SET paso = $2 WHERE id = $1", [o.id, siguiente]);
+        } else {
+          await this.autorizar(cliente, o, usuario);
+          autorizada = true;
+        }
+        firmadas.push({ id: o.id, solicitudId: o.solicitud_id, folio: o.folio, paso, siguiente, autorizada });
       }
 
       await cliente.query("COMMIT");
-      return { id: ordenId, solicitudId: o.solicitud_id, folio: o.folio, paso: o.paso, siguiente, autorizada };
+      return { paso, firmadas };
     } catch (e) {
       await cliente.query("ROLLBACK");
-      if (e.code === "23505") throw new AppError("Ese paso ya está firmado", 409);
+      if (e.code === "23505") throw new AppError("Una de las órdenes ya estaba firmada en ese paso", 409);
       throw e;
     } finally {
       cliente.release();

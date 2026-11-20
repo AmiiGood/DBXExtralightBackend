@@ -120,6 +120,40 @@ function partidas(doc, o) {
   doc.y += 4;
 }
 
+/** Los renglones de la orden (20-nov-2026): cada uno con su proveedor, sin IVA. */
+function renglones(doc, o) {
+  titulo(doc, "Lo que se compra");
+  const cols = [
+    { t: "Proveedor", w: 118, a: "left" },
+    { t: "Descripción", w: 224, a: "left" },
+    { t: "Cant.", w: 45, a: "right" },
+    { t: "Precio unitario", w: 75, a: "right" },
+    { t: "Importe", w: 70, a: "right" },
+  ];
+  const fila = (valores, { negrita = false, fondo = null } = {}) => {
+    doc.font(negrita ? "Helvetica-Bold" : "Helvetica").fontSize(8.5);
+    const alto = Math.max(...valores.map((v, i) => doc.heightOfString(String(v ?? ""), { width: cols[i].w - 8 }))) + 6;
+    cabe(doc, alto);
+    const y = doc.y;
+    if (fondo) doc.rect(M, y, UTIL, alto).fill(fondo);
+    let x = M;
+    valores.forEach((v, i) => {
+      doc.fillColor(fondo === AZUL ? "#ffffff" : TINTA).text(String(v ?? ""), x + 4, y + 3, { width: cols[i].w - 8, align: cols[i].a });
+      x += cols[i].w;
+    });
+    doc.moveTo(M, y + alto).lineTo(M + UTIL, y + alto).lineWidth(0.4).strokeColor(LINEA).stroke();
+    doc.y = y + alto;
+  };
+  fila(cols.map((x) => x.t), { negrita: true, fondo: AZUL });
+  for (const l of o.lineas) {
+    const desc = l.motivo ? `${l.descripcion}
+Motivo: ${l.motivo}` : l.descripcion;
+    fila([l.proveedor, desc, `${cantidad(l.cantidad)}${l.unidad ? " " + l.unidad : ""}`, dinero(l.precio_unitario, o.moneda), dinero(l.importe, o.moneda)]);
+  }
+  fila(["", "", "", "Total sin IVA", dinero(o.monto, o.moneda)], { negrita: true, fondo: "#f3f4f6" });
+  doc.y += 4;
+}
+
 function firmas(doc, o) {
   titulo(doc, "Autorizaciones");
   const alto = 128;
@@ -225,7 +259,8 @@ function generar(o) {
       ["Lo atiende en Compras", o.asignado_nombre],
     ]);
 
-    partidas(doc, o);
+    if (o.lineas?.length) renglones(doc, o);
+    else partidas(doc, o);
 
     titulo(doc, "Clasificación");
     ficha(doc, [
